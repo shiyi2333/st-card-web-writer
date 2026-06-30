@@ -10,6 +10,7 @@
     <div class="app-shell">
       <aside class="rail">
         <div class="brand">
+          <span class="brand-mark">ST</span>
           <div>
             <h1>写卡器</h1>
             <p id="healthLine">localhost:5678</p>
@@ -32,6 +33,13 @@
         </header>
 
         <section id="chatPanel" class="panel active">
+          <div class="panel-titlebar">
+            <div>
+              <span class="eyebrow">Writer</span>
+              <h2>对话写卡</h2>
+            </div>
+            <span class="mode-pill">DeepSeek</span>
+          </div>
           <div class="chat-head">
             <input id="conversationTitle" class="title-input" placeholder="角色卡标题">
             <button id="saveTitleBtn" class="ghost-button">保存</button>
@@ -50,6 +58,13 @@
         </section>
 
         <section id="previewPanel" class="panel">
+          <div class="panel-titlebar">
+            <div>
+              <span class="eyebrow">Card</span>
+              <h2>角色卡预览</h2>
+            </div>
+            <span class="mode-pill warm">可点击区块</span>
+          </div>
           <div class="toolbar">
             <select id="messageSelect"></select>
             <button id="refreshPreviewBtn" class="ghost-button">预览</button>
@@ -66,6 +81,13 @@
         </section>
 
         <section id="imagesPanel" class="panel">
+          <div class="panel-titlebar">
+            <div>
+              <span class="eyebrow">Danbooru</span>
+              <h2>配图选择</h2>
+            </div>
+            <span class="mode-pill">5 / 10</span>
+          </div>
           <div class="toolbar">
             <input id="imageTags" class="wide-input" placeholder="Danbooru tags，例如 white_hair t-shirt huge_breasts">
             <select id="imageLimit">
@@ -79,6 +101,13 @@
         </section>
 
         <section id="filesPanel" class="panel">
+          <div class="panel-titlebar">
+            <div>
+              <span class="eyebrow">Workspace</span>
+              <h2>角色卡目录</h2>
+            </div>
+            <span class="mode-pill warm">本地文件</span>
+          </div>
           <div class="toolbar">
             <select id="workspaceSelect"></select>
             <input id="workspaceName" class="wide-input" placeholder="新工作区名称">
@@ -94,6 +123,13 @@
         </section>
 
         <section id="searchPanel" class="panel">
+          <div class="panel-titlebar">
+            <div>
+              <span class="eyebrow">Tavily</span>
+              <h2>网页搜索</h2>
+            </div>
+            <span class="mode-pill">Search</span>
+          </div>
           <div class="toolbar">
             <input id="webQuery" class="wide-input" placeholder="Tavily 网页搜索">
             <button id="webSearchBtn" class="primary-button">搜索</button>
@@ -102,6 +138,13 @@
         </section>
 
         <section id="modelsPanel" class="panel">
+          <div class="panel-titlebar">
+            <div>
+              <span class="eyebrow">Model</span>
+              <h2>模型与 Key</h2>
+            </div>
+            <span class="mode-pill warm">本地保存</span>
+          </div>
           <div class="split-pane">
             <div>
               <div class="section-title">
@@ -127,6 +170,13 @@
         </section>
 
         <section id="promptsPanel" class="panel">
+          <div class="panel-titlebar">
+            <div>
+              <span class="eyebrow">Preset</span>
+              <h2>提示词预设</h2>
+            </div>
+            <span class="mode-pill">拖动排序</span>
+          </div>
           <div class="split-pane prompt-layout">
             <div>
               <div class="section-title">
@@ -151,6 +201,13 @@
         </section>
 
         <section id="settingsPanel" class="panel">
+          <div class="panel-titlebar">
+            <div>
+              <span class="eyebrow">Local</span>
+              <h2>本地设置</h2>
+            </div>
+            <span class="mode-pill warm">5678</span>
+          </div>
           <form id="settingsForm" class="settings-grid">
             <label>角色卡根目录<input id="workspaceRootInput" placeholder="G:\角色卡"></label>
             <label>Tavily API Key<input id="tavilyKeyInput" type="password" autocomplete="new-password" placeholder="留空则不修改"></label>
