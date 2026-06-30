@@ -355,6 +355,60 @@ a:hover {
   flex: none;
 }
 
+.mobile-conversation-toggle,
+.mobile-conversation-drawer {
+  display: none;
+}
+
+.mobile-conversation-drawer {
+  flex: none;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface) 96%, transparent);
+  box-shadow: 0 10px 22px rgba(29, 43, 39, 0.08);
+}
+
+.drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+}
+
+.mobile-conversation-list {
+  max-height: min(48dvh, 360px);
+  overflow: auto;
+  padding: 0 10px 10px;
+}
+
+.mobile-conversation-item {
+  width: 100%;
+  text-align: left;
+  border-radius: 7px;
+  padding: 11px 12px;
+  margin-bottom: 7px;
+  border: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+  background: var(--surface);
+}
+
+.mobile-conversation-item.active {
+  border-color: color-mix(in srgb, var(--accent) 38%, transparent);
+  background: var(--accent-soft);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.mobile-conversation-item h3 {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.mobile-conversation-item p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .chat-scroll {
   position: relative;
   display: flex;
@@ -1257,6 +1311,33 @@ a:hover {
     font-size: 21px;
   }
 
+  .mobile-conversation-toggle {
+    display: inline-grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    flex: none;
+  }
+
+  .mobile-conversation-drawer.open {
+    display: block;
+  }
+
+  .chat-head {
+    position: relative;
+    z-index: 5;
+  }
+
+  .chat-head .title-input {
+    min-width: 0;
+  }
+
+  #saveTitleBtn {
+    flex: none;
+    min-width: 86px;
+    padding: 0 10px;
+  }
+
   .chat-scroll > .hero-carousel {
     inset: 10px;
   }
@@ -1366,6 +1447,17 @@ a:hover {
 
   .chat-head .title-input {
     height: 34px;
+  }
+
+  .mobile-conversation-toggle {
+    width: 34px;
+    height: 34px;
+    min-height: 34px;
+  }
+
+  #saveTitleBtn {
+    min-height: 34px;
+    min-width: 76px;
   }
 
   .skill-picker {

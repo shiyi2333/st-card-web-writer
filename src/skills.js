@@ -121,7 +121,7 @@ export async function readSkillCatalog({ refresh = false } = {}) {
 
 export function skillCatalogPrompt(skills = DEFAULT_SKILLS) {
   return [
-    '你是一个通用助手，可以讨论各种主题。你可以根据用户意图自行选择是否使用下列 skills；只有真正有帮助时才使用，不要为了使用而使用。',
+    '固定工具说明：根据用户意图判断是否需要使用下列 skills；只有真正有帮助时才使用，不要为了使用而使用。',
     '如果用户从界面显式选择了某个 skill，本轮优先遵循该 skill。普通聊天不要擅自进入角色卡制作格式。',
     '',
     ...skills.map((skill) => `- ${skill.name} (${skill.id}): ${skill.description}`)

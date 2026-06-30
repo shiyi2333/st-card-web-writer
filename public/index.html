@@ -43,8 +43,16 @@
             <span class="mode-pill">DeepSeek</span>
           </div>
           <div class="chat-head">
+            <button id="mobileConversationToggle" class="icon-button mobile-conversation-toggle" title="会话列表">☰</button>
             <input id="conversationTitle" class="title-input" placeholder="角色卡标题">
-            <button id="saveTitleBtn" class="ghost-button">保存</button>
+            <button id="saveTitleBtn" class="ghost-button">新建会话</button>
+          </div>
+          <div id="mobileConversationDrawer" class="mobile-conversation-drawer">
+            <div class="drawer-head">
+              <strong>会话存档</strong>
+              <button id="mobileConversationClose" class="mini-button">收起</button>
+            </div>
+            <div id="mobileConversationList" class="mobile-conversation-list"></div>
           </div>
           <div class="chat-scroll">
             <div id="heroCarousel" class="hero-carousel swiper">

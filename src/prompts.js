@@ -32,8 +32,7 @@ export const CARD_SECTIONS = [
 export const GENERAL_ASSISTANT_PROMPT = `你是一个通用助手，可以自然讨论各种主题，也可以在用户需要时协助完成写作、搜索、文件整理和 SillyTavern 角色卡制作。
 
 默认情况下按普通对话回答，不要主动输出角色卡 Markdown，也不要擅自进入固定角色卡格式。
-只有当用户明确要求写卡、改卡、搜图、导出、网页搜索或从界面选择了相关 skill 时，才使用对应 skill 的说明。
-如果需要调用工具，先根据 skill 目录判断动作；工具结果会由系统提供，然后你再综合结果回复用户。`;
+工具使用说明会由系统在运行时固定提供。`;
 
 function block(input = {}, index = 0) {
   const type = PROMPT_BLOCK_TYPES.includes(input.type) ? input.type : 'normal';
@@ -54,9 +53,8 @@ function block(input = {}, index = 0) {
 export function makeDefaultPromptSet(createdAt = nowIso(), skills = DEFAULT_SKILLS) {
   const blocks = [
     block({ type: 'head', role: 'system', title: '通用助手规则', content: GENERAL_ASSISTANT_PROMPT, order: 10 }),
-    block({ type: 'skill', role: 'developer', title: 'Skill 目录', content: skillCatalogPrompt(skills), order: 20, identifier: 'skillCatalog' }),
-    block({ type: 'historySlot', role: 'system', title: '对话历史', order: 30 }),
-    block({ type: 'inputSlot', role: 'user', title: '用户输入', order: 40 })
+    block({ type: 'historySlot', role: 'system', title: '对话历史', order: 20 }),
+    block({ type: 'inputSlot', role: 'user', title: '用户输入', order: 30 })
   ];
 
   return {
@@ -165,23 +163,7 @@ export function normalizePromptForSave(input = {}) {
 
 export function ensurePromptSkillCatalog(prompt = {}, skills = DEFAULT_SKILLS) {
   const normalized = normalizePrompt(prompt);
-  const catalog = skillCatalogPrompt(skills);
-  const existing = normalized.messages.find((message) => message.identifier === 'skillCatalog' || message.title === 'Skill 目录');
-  if (existing) {
-    existing.content = catalog;
-    existing.type = 'skill';
-    existing.role = existing.role || 'developer';
-    existing.identifier = 'skillCatalog';
-    return normalizePrompt(normalized);
-  }
-  normalized.messages.push(block({
-    type: 'skill',
-    role: 'developer',
-    title: 'Skill 目录',
-    content: catalog,
-    order: 25,
-    identifier: 'skillCatalog'
-  }));
+  normalized.messages = normalized.messages.filter((message) => message.identifier !== 'skillCatalog' && message.title !== 'Skill 目录');
   return normalizePrompt(normalized);
 }
 
@@ -208,7 +190,7 @@ export function buildMessages({
   toolResults = []
 }) {
   const normalized = normalizePrompt(prompt);
-  const blocks = normalized.messages.filter((item) => item.enabled !== false);
+  const blocks = normalized.messages.filter((item) => item.enabled !== false && item.identifier !== 'skillCatalog' && item.title !== 'Skill 目录');
   const history = (conversation?.messages || [])
     .filter((message) => ['user', 'assistant'].includes(message.role))
     .map((message) => ({
@@ -217,6 +199,7 @@ export function buildMessages({
     }));
 
   const sectionPrefix = section ? `【目标区块：${section}】\n` : '';
+  const fixedToolPrompt = skillCatalogPrompt(skillCatalog);
   const skillPrefix = selectedSkillPrompt(selectedSkills, skillCatalog);
   const toolPrefix = toolResults.length
     ? `以下是本轮已执行 skill/tool 的结果，请基于这些结果回答：\n${JSON.stringify(toolResults, null, 2)}`
@@ -228,6 +211,10 @@ export function buildMessages({
 
   const insertHistory = () => {
     if (historyInserted) return;
+    output.push({
+      role: mapRole('developer', developerRoleMode),
+      content: fixedToolPrompt
+    });
     output.push(...history);
     historyInserted = true;
   };

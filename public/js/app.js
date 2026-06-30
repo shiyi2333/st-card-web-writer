@@ -301,14 +301,27 @@ async function loadConversations() {
 
 function renderConversations() {
   const list = $('#conversationList');
+  const mobileList = $('#mobileConversationList');
   list.innerHTML = '';
+  if (mobileList) mobileList.innerHTML = '';
   state.conversations.forEach((conversation) => {
-    const button = document.createElement('button');
-    button.className = `conversation-item ${state.currentConversation?.id === conversation.id ? 'active' : ''}`;
-    button.innerHTML = `<h3>${escapeHtml(conversation.title)}</h3><p>${conversation.messageCount} 条 / ${formatDate(conversation.updatedAt)}</p>`;
-    button.addEventListener('click', () => selectConversation(conversation.id).catch((error) => toast(error.message, 'error')));
-    list.appendChild(button);
+    list.appendChild(createConversationButton(conversation));
+    if (mobileList) mobileList.appendChild(createConversationButton(conversation, true));
   });
+}
+
+function createConversationButton(conversation, mobile = false) {
+  const button = document.createElement('button');
+  button.className = `${mobile ? 'mobile-conversation-item' : 'conversation-item'} ${state.currentConversation?.id === conversation.id ? 'active' : ''}`;
+  button.innerHTML = `<h3>${escapeHtml(conversation.title)}</h3><p>${conversation.messageCount} 条 / ${formatDate(conversation.updatedAt)}</p>`;
+  button.addEventListener('click', () => {
+    selectConversation(conversation.id)
+      .then(() => {
+        if (mobile) closeMobileConversationDrawer();
+      })
+      .catch((error) => toast(error.message, 'error'));
+  });
+  return button;
 }
 
 async function createConversation() {
@@ -331,9 +344,18 @@ async function saveTitle() {
   if (!state.currentConversation) return;
   const title = $('#conversationTitle').value.trim();
   if (!title) return;
+  if (title === state.currentConversation.title) return;
   await api(`/api/conversations/${state.currentConversation.id}`, { method: 'PUT', body: JSON.stringify({ title }) });
   await loadConversations();
   toast('标题已保存');
+}
+
+function toggleMobileConversationDrawer() {
+  $('#mobileConversationDrawer')?.classList.toggle('open');
+}
+
+function closeMobileConversationDrawer() {
+  $('#mobileConversationDrawer')?.classList.remove('open');
 }
 
 function messageRoleName(role) {
@@ -1106,8 +1128,18 @@ function wireEvents() {
   $('#fullscreenFab').addEventListener('click', requestLandscapeFullscreen);
   $('#portraitFullscreenFab').addEventListener('click', requestPortraitFullscreen);
   $('#addSkillBtn').addEventListener('click', addSelectedSkill);
+  $('#mobileConversationToggle')?.addEventListener('click', toggleMobileConversationDrawer);
+  $('#mobileConversationClose')?.addEventListener('click', closeMobileConversationDrawer);
   $('#newConversationBtn').addEventListener('click', () => createConversation().catch((error) => toast(error.message, 'error')));
-  $('#saveTitleBtn').addEventListener('click', () => saveTitle().catch((error) => toast(error.message, 'error')));
+  $('#saveTitleBtn').addEventListener('click', () => createConversation().catch((error) => toast(error.message, 'error')));
+  $('#conversationTitle').addEventListener('blur', () => saveTitle().catch((error) => toast(error.message, 'error')));
+  $('#conversationTitle').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      saveTitle().catch((error) => toast(error.message, 'error'));
+      event.currentTarget.blur();
+    }
+  });
   $('#sendBtn').addEventListener('click', () => sendMessage().catch((error) => toast(error.message, 'error')));
   $('#regenerateBtn').addEventListener('click', regenerateLast);
   $('#clearSectionBtn').addEventListener('click', clearSection);
