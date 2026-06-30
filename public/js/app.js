@@ -364,8 +364,15 @@ function messageRoleName(role) {
 }
 
 function toolResultHtml(tool = {}) {
+  const meta = `
+    <div class="tool-meta">
+      <span>方法：${escapeHtml(tool.method || tool.action || 'agentAction')}</span>
+      <span>状态：${escapeHtml(tool.status || 'unknown')}</span>
+    </div>
+  `;
   if (tool.action === 'web-search' && tool.result?.results?.length) {
     return `
+      ${meta}
       <div class="tool-links">
         ${tool.result.results.map((item) => `
           <a class="tool-link-card" href="${escapeHtml(item.url)}" target="_blank">
@@ -378,11 +385,11 @@ function toolResultHtml(tool = {}) {
     `;
   }
   if (tool.action === 'image-search' && tool.result?.results?.length) {
-    return `<div class="tool-grid">${tool.result.results.slice(0, 5).map((image) => `
+    return `${meta}<div class="tool-grid">${tool.result.results.slice(0, 5).map((image) => `
       <img src="/api/images/proxy?url=${encodeURIComponent(image.previewUrl || image.sampleUrl || image.fileUrl)}" alt="Danbooru ${escapeHtml(image.id)}">
     `).join('')}</div>`;
   }
-  return `<pre>${escapeHtml(JSON.stringify(tool.result || tool.error || {}, null, 2))}</pre>`;
+  return `${meta}<pre>${escapeHtml(JSON.stringify(tool.result || tool.error || {}, null, 2))}</pre>`;
 }
 
 function renderMessages() {
@@ -559,6 +566,7 @@ function upsertToolMessage(payload, status, summary) {
     ...(message.tool || {}),
     ...(payload.toolMessage?.tool || {}),
     action: payload.action || message.tool?.action,
+    method: payload.method || payload.toolMessage?.tool?.method || message.tool?.method,
     status,
     summary,
     input: payload.input || message.tool?.input,

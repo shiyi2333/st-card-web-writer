@@ -29,9 +29,11 @@ actions: [card-section-rewrite, image-search, export-card]
 - 名称用轻小说或网文风格命名角色卡，不要只写角色真名。
 - 描述必须是 fenced yaml 块，至少包含 identity、appearance、primary_attributes。外表要明确记录发色、体型、胸部规模、常用服装、主要属性。
 - 开场白是一条完整 first message，默认 300-500 个汉字，至少三段自然段，段落之间空行。不要写成一团。
+- 开场白直接进入场景。用户用“你”代指，角色部分用第三人称、角色姓名或自然代称来写；不要在自然叙事里反复写“{{user}}”。
 - 默认不要状态栏。只有用户明确要求状态栏时才加入 description.status_bar 和系统提示词里的状态栏规则。默认状态栏字段固定为：【乳头】【情绪】【服饰】【阴道精液量】。
 - 状态栏不要重复复制；只在每次回复末尾追加一次。如果开场白里需要展示初始状态栏，也只展示一个具体状态栏。
 - 行文采用轻网文式的自然叙事节奏，人物的语言、动作和神态要彼此衔接，不要让对话悬空。
+- 需要成人肉感文风时，优先调用或遵循 `st-card-style-guide` 与 `openclaw-erotic-style`；导出时默认世界书会带入安产型肉感体态模板，不要把这些规则写成 Markdown 列表塞进角色正文。
 - 作者备注是给玩家看的角色卡简介，不是图片来源。不要 Markdown 列表。通常 6-12 个短段落，可以从开场白的一部分气氛中延展，用“你”作为玩家视角，包含 2-4 段中文引号台词，并用疑问或未解悬念收尾。
 - 标签是 ST 检索标签，3-10 个，推荐 5-8 个。只写卡内设定能推出的标签，不要混入 1girl、solo、t-shirt 这类绘图标签。
 - 绘图标签是 Danbooru 英文 tags，6-12 个。通常包含 1girl/1boy、solo、original，优先发色和常见服装；服装不明确时用 t-shirt。可以使用宽松成人向标签和常见属性保底，例如 mesugaki、huge breasts、nsfw、cleavage、shirt lift，但禁止 loli、shota、young、child、underage。

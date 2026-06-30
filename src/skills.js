@@ -24,6 +24,14 @@ export const DEFAULT_SKILLS = [
     prompt: '只重写用户指定的角色卡区块。除非上下文一致性必须调整，否则不要大幅改动其他区块；最终仍输出完整 Markdown 角色卡。'
   },
   {
+    id: 'st-card-style-guide',
+    name: 'ST 角色卡文风指南',
+    category: '写卡',
+    description: '写作、改写或检查 SillyTavern 角色卡时使用的文风和结构指南。',
+    actions: [],
+    prompt: '只在用户明确写卡、改卡、检查或导出 ST 角色卡时使用。开场白用“你”代指用户，角色部分用第三人称、角色姓名或自然代称；写具体可扮演的材料，不写空泛简介。'
+  },
+  {
     id: 'image-search',
     name: 'Danbooru 搜图',
     category: '工具',

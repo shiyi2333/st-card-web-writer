@@ -202,6 +202,17 @@ function toolSummary(action, result) {
   return `工具已完成: ${action}`;
 }
 
+function toolMethod(action) {
+  return {
+    'web-search': 'tavilySearch',
+    'image-search': 'searchDanbooru',
+    'export-card': 'makeCardJson + previewFromMarkdown',
+    'workspace-write': 'writeWorkspaceArtifact',
+    'card-section-rewrite': 'sectionTargeting',
+    'skill-prompt': 'skillPromptInjection'
+  }[action] || 'agentAction';
+}
+
 function normalizeActionInput(action, input = {}, userText = '') {
   if (action === 'web-search') return { query: input.query || userText, maxResults: input.maxResults || 5 };
   if (action === 'image-search') return { tags: input.tags || userText, limit: input.limit || store.data.settings.imageResultCount || 10, page: input.page || 1 };
@@ -247,6 +258,7 @@ async function executeAgentAction(action, input, conversation, emit = null) {
 
   const toolMessage = await appendToolMessage(conversation, {
     action,
+    method: toolMethod(action),
     status: 'ok',
     summary: toolSummary(action, result),
     input,
@@ -272,6 +284,19 @@ function fallbackPlanFromText(text = '', selectedSkills = []) {
   return actions.slice(0, 3);
 }
 
+function fallbackSkillIdsFromText(text = '', selectedSkills = []) {
+  const ids = new Set((selectedSkills || []).map(String));
+  const value = String(text || '').toLowerCase();
+  if (/角色卡|写卡|改卡|st\b|sillytavern|tavern|作者备注|开场白|first message|预览卡|导出卡/.test(value)) {
+    ids.add('character-card-writer');
+    ids.add('st-card-style-guide');
+  }
+  if (/肉感|安产|成人文风|色情文风|情色文风|openclaw|肥尻|宽胯|巨乳/.test(value)) {
+    ids.add('openclaw-erotic-style');
+  }
+  return [...ids];
+}
+
 async function planSkillActions({ model, conversation, userText, section, selectedSkills, skills }) {
   const allowedActions = new Set(['web-search', 'image-search', 'export-card', 'workspace-write', 'card-section-rewrite']);
   const allowedSkills = new Set((skills || []).map((skill) => skill.id));
@@ -288,6 +313,7 @@ async function planSkillActions({ model, conversation, userText, section, select
             'JSON 格式：{"skills":["skill-id"],"actions":[{"action":"web-search|image-search|export-card|workspace-write|card-section-rewrite","input":{},"reason":"简短原因"}]}',
             '只有用户明确需要工具时才返回 action；普通聊天返回 {"actions":[]}.',
             '如果用户需要某个纯提示词风格 skill，可以只返回 skills，不需要虚构 action。',
+            '写卡、改卡、作者备注、开场白、ST/SillyTavern 相关请求应优先选择 character-card-writer 和 st-card-style-guide；成人肉感/安产型文风请求可选择 openclaw-erotic-style。',
             '不要执行删除、移动等危险文件操作。',
             `可用 skills：${JSON.stringify(skills.map(({ id, name, description, actions }) => ({ id, name, description, actions })))}`
           ].join('\n')
@@ -308,7 +334,7 @@ async function planSkillActions({ model, conversation, userText, section, select
       ? payload.skills.map(String).filter((skillId) => allowedSkills.has(skillId))
       : [];
     return {
-      skills: [...new Set([...selected, ...plannedSkills])],
+      skills: [...new Set([...fallbackSkillIdsFromText(userText, selected), ...plannedSkills].filter((skillId) => allowedSkills.has(skillId)))],
       actions: planned
         .filter((item) => allowedActions.has(item.action))
         .slice(0, 3)
@@ -320,7 +346,7 @@ async function planSkillActions({ model, conversation, userText, section, select
     };
   } catch {
     return {
-      skills: selected,
+      skills: fallbackSkillIdsFromText(userText, selected).filter((skillId) => allowedSkills.has(skillId)),
       actions: fallbackPlanFromText(userText, selected).map((item) => ({
         ...item,
         input: normalizeActionInput(item.action, item.input || {}, userText)
@@ -635,22 +661,23 @@ app.post('/api/chat', async (req, res, next) => {
       const toolId = `skill_${Date.now()}_${skillId}`;
       const input = { skillId, name: skill.name };
       const result = { skillId, name: skill.name, category: skill.category };
-      sse(res, 'skill_start', { toolId, action: 'skill-prompt', reason: '注入纯提示词 skill', input });
+      sse(res, 'skill_start', { toolId, action: 'skill-prompt', method: toolMethod('skill-prompt'), reason: '注入纯提示词 skill', input });
       const toolMessage = await appendToolMessage(conversation, {
         action: 'skill-prompt',
+        method: toolMethod('skill-prompt'),
         status: 'ok',
         summary: `已注入 skill：${skill.name}`,
         input,
         result,
         createdAt: nowIso()
       });
-      sse(res, 'skill_result', { toolId, action: 'skill-prompt', result, toolMessage });
+      sse(res, 'skill_result', { toolId, action: 'skill-prompt', method: toolMethod('skill-prompt'), result, toolMessage });
     }
 
     for (const [index, planned] of plan.actions.entries()) {
       const toolId = `tool_${Date.now()}_${index}`;
       const input = normalizeActionInput(planned.action, planned.input || {}, req.body.message);
-      sse(res, 'skill_start', { toolId, action: planned.action, reason: planned.reason || '', input });
+      sse(res, 'skill_start', { toolId, action: planned.action, method: toolMethod(planned.action), reason: planned.reason || '', input });
       try {
         const { result, toolMessage } = await executeAgentAction(planned.action, input, conversation, (event, payload) => {
           sse(res, event, { toolId, ...payload });
@@ -661,6 +688,7 @@ app.post('/api/chat', async (req, res, next) => {
       } catch (error) {
         const toolMessage = await appendToolMessage(conversation, {
           action: planned.action,
+          method: toolMethod(planned.action),
           status: 'error',
           summary: `工具失败: ${planned.action}`,
           input,

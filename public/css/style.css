@@ -668,6 +668,22 @@ a:hover {
   background: color-mix(in srgb, var(--surface) 62%, transparent);
 }
 
+.tool-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.tool-meta span {
+  border: 1px solid color-mix(in srgb, var(--line) 76%, transparent);
+  border-radius: 999px;
+  padding: 4px 8px;
+  background: color-mix(in srgb, var(--surface-2) 65%, transparent);
+}
+
 .message .role {
   display: flex;
   justify-content: space-between;
