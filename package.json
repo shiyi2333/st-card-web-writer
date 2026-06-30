@@ -1,0 +1,28 @@
+{
+  "name": "st-card-web-writer",
+  "version": "1.0.0",
+  "description": "Mobile-first SillyTavern character-card writer with model, prompt, chat archive, preview, and PNG export.",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "check": "node --check src/server.js"
+  },
+  "keywords": [
+    "sillytavern",
+    "character-card",
+    "tavern-card-v2",
+    "mobile",
+    "termux"
+  ],
+  "author": "shiyi2333",
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "express": "^4.19.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
