@@ -29,14 +29,34 @@ export function normalizeImageTags(tags = '') {
   return normalized.slice(0, 12);
 }
 
-export async function searchDanbooru({ tags = '', limit = 10, usedIds = [] }) {
+function normalizePost(post) {
+  return {
+    id: post.id,
+    rating: post.rating,
+    score: post.score,
+    width: post.image_width,
+    height: post.image_height,
+    previewUrl: post.preview_file_url,
+    sampleUrl: post.large_file_url || post.file_url || post.preview_file_url,
+    fileUrl: post.file_url || post.large_file_url || post.preview_file_url,
+    source: post.source || '',
+    tags: String(post.tag_string || '').split(' ').slice(0, 36),
+    postUrl: `https://danbooru.donmai.us/posts/${post.id}`
+  };
+}
+
+export async function searchDanbooru({ tags = '', limit = 10, usedIds = [], page = 1, offset = 0, includeUsed = false }) {
   const count = Number(limit) === 5 ? 5 : 10;
   const normalized = normalizeImageTags(tags);
   const used = new Set((usedIds || []).map(String));
   const queryTags = normalized.slice(0, 2);
+  const pageNumber = Math.max(1, Number(page || 1));
+  const extraOffset = Math.max(0, Number(offset || 0));
+  const fetchLimit = Math.min(100, count * 8 + extraOffset);
   const params = new URLSearchParams({
     tags: `${queryTags.join(' ')} rating:e`,
-    limit: String(Math.min(100, count * 8))
+    limit: String(fetchLimit),
+    page: String(pageNumber)
   });
   const response = await fetch(`${DANBOORU_URL}?${params}`, {
     headers: { Accept: 'application/json', 'User-Agent': 'st-card-web-writer/1.0' }
@@ -46,24 +66,24 @@ export async function searchDanbooru({ tags = '', limit = 10, usedIds = [] }) {
     throw new Error(`Danbooru 搜图失败: ${response.status} ${detail.slice(0, 160)}`);
   }
   const posts = await response.json();
-  const results = posts
+  const filtered = posts
     .filter((post) => post.file_url || post.large_file_url || post.preview_file_url)
-    .filter((post) => !used.has(String(post.id)))
-    .map((post) => ({
-      id: post.id,
-      rating: post.rating,
-      score: post.score,
-      width: post.image_width,
-      height: post.image_height,
-      previewUrl: post.preview_file_url,
-      sampleUrl: post.large_file_url || post.file_url || post.preview_file_url,
-      fileUrl: post.file_url || post.large_file_url || post.preview_file_url,
-      source: post.source || '',
-      tags: String(post.tag_string || '').split(' ').slice(0, 36),
-      postUrl: `https://danbooru.donmai.us/posts/${post.id}`
-    }))
+    .filter((post) => includeUsed || !used.has(String(post.id)))
+    .slice(extraOffset)
+    .map(normalizePost)
     .slice(0, count);
-  return { tags: normalized, queryTags, results };
+
+  return {
+    tags: normalized,
+    queryTags,
+    page: pageNumber,
+    offset: extraOffset,
+    next: {
+      page: pageNumber + 1,
+      offset: 0
+    },
+    results: filtered
+  };
 }
 
 export async function tavilySearch({ apiKey, query, maxResults = 5 }) {

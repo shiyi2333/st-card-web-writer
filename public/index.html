@@ -4,7 +4,9 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title>ST Card Web Writer</title>
+    <link rel="stylesheet" href="/vendor/swiper-bundle.min.css">
     <link rel="stylesheet" href="/css/style.css">
+    <script defer src="/vendor/swiper-bundle.min.js"></script>
   </head>
   <body>
     <div class="app-shell">
@@ -27,12 +29,12 @@
           <button class="tab-button" data-tab="images">搜图</button>
           <button class="tab-button" data-tab="files">目录</button>
           <button class="tab-button" data-tab="search">搜索</button>
-          <button class="tab-button" data-tab="models">模型</button>
           <button class="tab-button" data-tab="prompts">预设</button>
+          <button class="tab-button" data-tab="models">模型</button>
           <button class="tab-button" data-tab="settings">设置</button>
         </header>
 
-        <section id="chatPanel" class="panel active">
+        <section id="chatPanel" class="panel active chat-panel">
           <div class="panel-titlebar">
             <div>
               <span class="eyebrow">Writer</span>
@@ -44,7 +46,13 @@
             <input id="conversationTitle" class="title-input" placeholder="角色卡标题">
             <button id="saveTitleBtn" class="ghost-button">保存</button>
           </div>
-          <div id="messageList" class="message-list"></div>
+          <div class="chat-scroll">
+            <div id="heroCarousel" class="hero-carousel swiper">
+              <div id="carouselSlides" class="swiper-wrapper"></div>
+              <div class="swiper-pagination"></div>
+            </div>
+            <div id="messageList" class="message-list"></div>
+          </div>
           <div class="composer">
             <div id="sectionChipRow" class="chip-row"></div>
             <textarea id="messageInput" rows="4" placeholder="输入角色设定、修改要求，或点击预览区块后单独修改"></textarea>
@@ -63,7 +71,7 @@
               <span class="eyebrow">Card</span>
               <h2>角色卡预览</h2>
             </div>
-            <span class="mode-pill warm">可点击区块</span>
+            <span class="mode-pill warm">点击区块</span>
           </div>
           <div class="toolbar">
             <select id="messageSelect"></select>
@@ -86,7 +94,7 @@
               <span class="eyebrow">Danbooru</span>
               <h2>配图选择</h2>
             </div>
-            <span class="mode-pill">5 / 10</span>
+            <span id="imagePageLine" class="mode-pill">第 1 页</span>
           </div>
           <div class="toolbar">
             <input id="imageTags" class="wide-input" placeholder="Danbooru tags，例如 white_hair t-shirt huge_breasts">
@@ -95,6 +103,7 @@
               <option value="5">5 张</option>
             </select>
             <button id="searchImagesBtn" class="primary-button">搜图</button>
+            <button id="loadMoreImagesBtn" class="ghost-button">继续 10 张</button>
           </div>
           <div id="selectedImageLine" class="result-line muted-line">还没有选择图片。</div>
           <div id="imageResults" class="image-grid"></div>
@@ -116,9 +125,7 @@
             <button id="deleteWorkspaceBtn" class="ghost-button">删除</button>
             <button id="refreshFilesBtn" class="ghost-button">刷新</button>
           </div>
-          <div class="file-root-line">
-            <span id="workspaceRootLine"></span>
-          </div>
+          <div class="file-root-line"><span id="workspaceRootLine"></span></div>
           <div id="fileList" class="file-list"></div>
         </section>
 
@@ -135,6 +142,51 @@
             <button id="webSearchBtn" class="primary-button">搜索</button>
           </div>
           <div id="webSearchResults" class="search-results"></div>
+        </section>
+
+        <section id="promptsPanel" class="panel">
+          <div class="panel-titlebar">
+            <div>
+              <span class="eyebrow">Pipeline</span>
+              <h2>提示词流水线</h2>
+            </div>
+            <span class="mode-pill">ST 风格</span>
+          </div>
+          <div class="split-pane prompt-layout">
+            <div>
+              <div class="section-title">
+                <h2>预设</h2>
+                <button id="newPromptBtn" class="ghost-button">新建</button>
+              </div>
+              <div id="promptList" class="stack-list"></div>
+            </div>
+            <form id="promptForm" class="form-card prompt-form">
+              <input type="hidden" id="promptId">
+              <label>预设名称<input id="promptName"></label>
+              <div class="prompt-toolbar">
+                <select id="newPromptType">
+                  <option value="head">固定头部</option>
+                  <option value="main">主提示词</option>
+                  <option value="skill">skill指导块</option>
+                  <option value="userPrefix">用户输入前缀</option>
+                  <option value="tail">固定尾部</option>
+                  <option value="normal">普通块</option>
+                  <option value="historySlot">对话历史占位</option>
+                  <option value="inputSlot">用户输入占位</option>
+                </select>
+                <button type="button" id="addPromptMessageBtn" class="ghost-button">添加块</button>
+                <label class="file-import">
+                  <span>导入 ST JSON</span>
+                  <input id="stPresetInput" type="file" accept="application/json,.json">
+                </label>
+              </div>
+              <div id="importPreview" class="import-preview"></div>
+              <div id="promptMessageList" class="prompt-message-list"></div>
+              <div class="button-row">
+                <button type="submit" class="primary-button">保存并启用</button>
+              </div>
+            </form>
+          </div>
         </section>
 
         <section id="modelsPanel" class="panel">
@@ -169,37 +221,6 @@
           </div>
         </section>
 
-        <section id="promptsPanel" class="panel">
-          <div class="panel-titlebar">
-            <div>
-              <span class="eyebrow">Preset</span>
-              <h2>提示词预设</h2>
-            </div>
-            <span class="mode-pill">拖动排序</span>
-          </div>
-          <div class="split-pane prompt-layout">
-            <div>
-              <div class="section-title">
-                <h2>预设</h2>
-                <button id="newPromptBtn" class="ghost-button">新建</button>
-              </div>
-              <div id="promptList" class="stack-list"></div>
-            </div>
-            <form id="promptForm" class="form-card prompt-form">
-              <input type="hidden" id="promptId">
-              <label>预设名称<input id="promptName"></label>
-              <div class="section-title compact">
-                <h2>提示词顺序</h2>
-                <button type="button" id="addPromptMessageBtn" class="ghost-button">添加一条</button>
-              </div>
-              <div id="promptMessageList" class="prompt-message-list"></div>
-              <div class="button-row">
-                <button type="submit" class="primary-button">保存并启用</button>
-              </div>
-            </form>
-          </div>
-        </section>
-
         <section id="settingsPanel" class="panel">
           <div class="panel-titlebar">
             <div>
@@ -217,17 +238,33 @@
                 <option value="auto">自动审批</option>
               </select>
             </label>
+            <label>developer role 发送方式
+              <select id="developerRoleModeInput">
+                <option value="compat">兼容模式：developer 转 system</option>
+                <option value="native">原样发送 developer</option>
+              </select>
+            </label>
+            <label>主题
+              <select id="themeInput">
+                <option value="system">跟随系统</option>
+                <option value="light">浅色</option>
+                <option value="dark">暗色</option>
+              </select>
+            </label>
             <label>默认搜图数量
               <select id="imageCountInput">
                 <option value="10">10 张</option>
                 <option value="5">5 张</option>
               </select>
             </label>
+            <label>轮播 Danbooru tags<input id="carouselTagsInput" placeholder="1girl solo huge_breasts t-shirt"></label>
             <button class="primary-button" type="submit">保存设置</button>
           </form>
         </section>
       </main>
     </div>
+
+    <button id="fullscreenFab" class="fullscreen-fab">横屏全屏</button>
 
     <nav class="mobile-tabs" id="mobileTabs">
       <button class="tab-button active" data-tab="chat">对话</button>

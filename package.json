@@ -19,8 +19,12 @@
   "author": "shiyi2333",
   "license": "MIT",
   "dependencies": {
+    "dompurify": "^3.4.11",
     "dotenv": "^16.4.7",
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "marked": "^18.0.5",
+    "sortablejs": "^1.15.7",
+    "swiper": "^14.0.1"
   },
   "engines": {
     "node": ">=20"

@@ -1,5 +1,20 @@
+import { marked } from '../vendor/marked.esm.js';
+import DOMPurify from '../vendor/purify.es.mjs';
+import Sortable from '../vendor/sortable.esm.js';
+
 const CARD_SECTIONS = ['名称', '描述', '性格', '场景', '开场白', '作者备注', '标签', '绘图标签', '示例对话', '系统提示词', '备用开场白'];
 const ROLES = ['system', 'developer', 'user', 'assistant'];
+const BLOCK_TYPES = [
+  ['head', '固定头部'],
+  ['main', '主提示词'],
+  ['skill', 'skill指导块'],
+  ['userPrefix', '用户输入前缀'],
+  ['historySlot', '对话历史占位'],
+  ['inputSlot', '用户输入占位'],
+  ['tail', '固定尾部'],
+  ['normal', '普通块']
+];
+const LOCKED_TYPES = new Set(['historySlot', 'inputSlot']);
 
 const state = {
   settings: {},
@@ -15,8 +30,22 @@ const state = {
   avatarDataUrl: '',
   workspaces: [],
   files: [],
-  lastUserText: ''
+  lastUserText: '',
+  imageSearch: {
+    tags: '',
+    page: 1,
+    results: []
+  },
+  carousel: null,
+  promptSortable: null
 };
+
+marked.setOptions({
+  breaks: true,
+  gfm: true,
+  mangle: false,
+  headerIds: false
+});
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -30,6 +59,10 @@ function escapeHtml(value) {
     .replaceAll("'", '&#039;');
 }
 
+function markdownHtml(value) {
+  return DOMPurify.sanitize(marked.parse(String(value || '')));
+}
+
 function formatDate(value) {
   if (!value) return '';
   return new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
@@ -40,7 +73,7 @@ function toast(text, kind = '') {
   node.className = `toast ${kind}`;
   node.textContent = text;
   document.body.appendChild(node);
-  setTimeout(() => node.remove(), 2200);
+  setTimeout(() => node.remove(), 2400);
 }
 
 async function api(url, options = {}) {
@@ -57,21 +90,46 @@ async function api(url, options = {}) {
   return payload;
 }
 
+function applyTheme(theme = 'system') {
+  const resolved = theme === 'system'
+    ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+    : theme;
+  document.documentElement.dataset.theme = resolved;
+}
+
 function setTab(name) {
   $$('.tab-button').forEach((button) => button.classList.toggle('active', button.dataset.tab === name));
   $$('.panel').forEach((panel) => panel.classList.remove('active'));
   $(`#${name}Panel`)?.classList.add('active');
 }
 
+async function requestLandscapeFullscreen() {
+  try {
+    if (!document.fullscreenElement) {
+      await document.documentElement.requestFullscreen?.();
+    }
+    try {
+      await screen.orientation?.lock?.('landscape');
+      toast('已进入横屏全屏');
+    } catch {
+      toast('已全屏；如果没有横屏，请手动旋转手机');
+    }
+  } catch (error) {
+    toast(`全屏失败: ${error.message}`, 'error');
+  }
+}
+
 async function loadHealth() {
   const health = await api('/api/health');
   state.settings = health.settings || {};
+  applyTheme(state.settings.theme || 'system');
   $('#healthLine').textContent = health.activeModel ? `${health.activeModel.name} / ${health.activePrompt || '无预设'}` : '未配置模型';
   fillSettingsForm();
 }
 
 async function loadSettings() {
   state.settings = await api('/api/settings');
+  applyTheme(state.settings.theme || 'system');
   fillSettingsForm();
 }
 
@@ -80,8 +138,11 @@ function fillSettingsForm() {
   $('#tavilyKeyInput').value = '';
   $('#tavilyKeyInput').placeholder = state.settings.hasTavilyKey ? state.settings.tavilyKey : '保存 Tavily API Key';
   $('#agentModeInput').value = state.settings.agentApprovalMode || 'confirm';
+  $('#developerRoleModeInput').value = state.settings.developerRoleMode || 'compat';
+  $('#themeInput').value = state.settings.theme || 'system';
   $('#imageCountInput').value = String(state.settings.imageResultCount || 10);
   $('#imageLimit').value = String(state.settings.imageResultCount || 10);
+  $('#carouselTagsInput').value = state.settings.carouselTags || '1girl solo huge_breasts t-shirt';
 }
 
 async function saveSettings(event) {
@@ -89,13 +150,56 @@ async function saveSettings(event) {
   const body = {
     workspaceRoot: $('#workspaceRootInput').value.trim(),
     agentApprovalMode: $('#agentModeInput').value,
-    imageResultCount: Number($('#imageCountInput').value)
+    developerRoleMode: $('#developerRoleModeInput').value,
+    theme: $('#themeInput').value,
+    imageResultCount: Number($('#imageCountInput').value),
+    carouselTags: $('#carouselTagsInput').value.trim()
   };
   const key = $('#tavilyKeyInput').value.trim();
   if (key) body.tavilyKey = key;
   state.settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify(body) });
+  applyTheme(state.settings.theme);
   await loadWorkspaces();
+  await loadCarousel();
   toast('设置已保存');
+}
+
+async function loadCarousel() {
+  const tags = encodeURIComponent(state.settings.carouselTags || '1girl solo huge_breasts t-shirt');
+  const payload = await api(`/api/images/carousel?tags=${tags}`);
+  renderCarousel(payload.results || [], payload.source, payload.warning);
+}
+
+function renderCarousel(images, source, warning) {
+  const wrapper = $('#carouselSlides');
+  wrapper.innerHTML = '';
+  if (!images.length) {
+    wrapper.innerHTML = '<div class="swiper-slide carousel-empty">轮播图暂时没有加载出来</div>';
+    return;
+  }
+  images.slice(0, 10).forEach((image) => {
+    const slide = document.createElement('div');
+    slide.className = 'swiper-slide';
+    const imgUrl = image.sampleUrl || image.previewUrl || image.fileUrl;
+    slide.innerHTML = `
+      <img src="/api/images/proxy?url=${encodeURIComponent(imgUrl)}" alt="Danbooru ${image.id}">
+      <div class="carousel-caption">
+        <strong>#${escapeHtml(image.id)}</strong>
+        <span>${escapeHtml((image.tags || []).slice(0, 6).join(' '))}</span>
+      </div>
+    `;
+    wrapper.appendChild(slide);
+  });
+  if (state.carousel) state.carousel.destroy(true, true);
+  if (window.Swiper) {
+    state.carousel = new window.Swiper('#heroCarousel', {
+      loop: images.length > 1,
+      autoplay: { delay: 3200, disableOnInteraction: false },
+      pagination: { el: '.swiper-pagination' },
+      effect: 'slide'
+    });
+  }
+  if (source === 'cache' && warning) toast('轮播使用缓存图，实时 D 站加载失败');
 }
 
 async function loadConversations() {
@@ -170,7 +274,8 @@ function renderMessages() {
           <span>${messageRoleName(message.role)}${message.section ? ` · ${escapeHtml(message.section)}` : ''}</span>
           <span>${formatDate(message.createdAt)}</span>
         </div>
-        <pre>${escapeHtml(message.content)}</pre>
+        <div class="message-markdown">${markdownHtml(message.content)}</div>
+        <details class="source-details"><summary>源码</summary><pre>${escapeHtml(message.content)}</pre></details>
         <div class="message-actions">
           <button class="mini-button" data-action="edit">编辑</button>
           ${message.role === 'assistant' ? '<button class="mini-button" data-action="preview">预览这条</button>' : ''}
@@ -191,7 +296,8 @@ function renderMessages() {
     }
     list.appendChild(item);
   });
-  list.scrollTop = list.scrollHeight;
+  const scroll = $('.chat-scroll');
+  if (scroll) scroll.scrollTop = scroll.scrollHeight;
 }
 
 async function editMessage(message) {
@@ -340,7 +446,7 @@ function renderPreview() {
     card.innerHTML = `
       <span class="section-kicker">${escapeHtml(state.preview.labels?.[name] || name)}</span>
       <h3>${escapeHtml(name)}</h3>
-      <pre>${escapeHtml(value)}</pre>
+      <div class="section-markdown">${markdownHtml(value)}</div>
     `;
     card.addEventListener('click', () => chooseSection(name));
     grid.appendChild(card);
@@ -351,11 +457,11 @@ function renderPreview() {
 async function exportCard(withPng) {
   if (!state.currentConversation) return;
   if (withPng && !state.avatarDataUrl) {
-    toast('请先在搜图区选择一张图片，或选择本地 PNG');
+    toast('请先在搜图区选择一张图片');
     setTab('images');
     return;
   }
-  const doExport = async () => api('/api/cards/export', {
+  const result = await maybeRunAction('导出角色卡到当前工作区', () => api('/api/cards/export', {
     method: 'POST',
     body: JSON.stringify({
       conversationId: state.currentConversation.id,
@@ -363,15 +469,13 @@ async function exportCard(withPng) {
       avatarDataUrl: withPng ? state.avatarDataUrl : '',
       selectedImage: state.selectedImage
     })
-  });
-  const result = await maybeRunAction('导出角色卡到当前工作区', doExport);
+  }));
   if (!result) return;
-  const links = [
+  $('#exportResult').innerHTML = [
     `<a href="${result.json}" target="_blank">JSON</a>`,
     `<a href="${result.markdown}" target="_blank">Markdown</a>`,
     result.png ? `<a href="${result.png}" target="_blank">PNG</a>` : ''
   ].filter(Boolean).join('');
-  $('#exportResult').innerHTML = links;
   state.preview = result.preview;
   renderPreview();
   await loadFiles();
@@ -379,17 +483,31 @@ async function exportCard(withPng) {
   toast('已导出到当前工作区');
 }
 
-async function searchImages() {
+async function searchImages(reset = true) {
   const tags = $('#imageTags').value.trim() || state.preview?.json?.data?.extensions?.danbooru_tags?.join(' ') || '1girl solo t-shirt huge_breasts';
   $('#imageTags').value = tags;
-  const result = await runAgentAction('image-search', { tags, limit: Number($('#imageLimit').value) }, `用 Danbooru 搜图: ${tags}`);
+  if (reset || state.imageSearch.tags !== tags) {
+    state.imageSearch = { tags, page: 1, results: [] };
+  }
+  const limit = Number($('#imageLimit').value);
+  const result = await runAgentAction('image-search', {
+    tags,
+    limit,
+    page: state.imageSearch.page
+  }, `用 Danbooru 搜图: ${tags}`);
   if (!result) return;
-  renderImageResults(result);
+  const seen = new Set(state.imageSearch.results.map((item) => String(item.id)));
+  for (const item of result.results) {
+    if (!seen.has(String(item.id))) state.imageSearch.results.push(item);
+  }
+  state.imageSearch.page = result.next?.page || state.imageSearch.page + 1;
+  renderImageResults({ ...result, results: state.imageSearch.results });
 }
 
 function renderImageResults(payload) {
   const grid = $('#imageResults');
   grid.innerHTML = '';
+  $('#imagePageLine').textContent = `下一页 ${state.imageSearch.page}`;
   if (!payload.results.length) {
     grid.innerHTML = '<div class="empty-state">没有找到可用图片，放宽 tag 或换成 t-shirt / huge_breasts / hair color 试试。</div>';
     return;
@@ -475,12 +593,7 @@ function renderWebResults(payload) {
 
 async function maybeRunAction(label, fn) {
   if ((state.settings.agentApprovalMode || 'confirm') === 'confirm' && !confirm(`执行工具动作：${label}`)) return null;
-  try {
-    return await fn();
-  } catch (error) {
-    toast(error.message, 'error');
-    throw error;
-  }
+  return fn();
 }
 
 async function runAgentAction(action, payload, label) {
@@ -488,11 +601,7 @@ async function runAgentAction(action, payload, label) {
   if (!state.currentConversation) await createConversation();
   const response = await api('/api/agent/actions', {
     method: 'POST',
-    body: JSON.stringify({
-      conversationId: state.currentConversation.id,
-      action,
-      ...payload
-    })
+    body: JSON.stringify({ conversationId: state.currentConversation.id, action, ...payload })
   });
   await selectConversation(state.currentConversation.id);
   return response.result;
@@ -605,7 +714,6 @@ async function moveFile(name) {
   const fromWorkspace = state.settings.currentWorkspace || $('#workspaceSelect').value;
   const toWorkspace = prompt('移动到哪个工作区？', state.workspaces.find((item) => item !== fromWorkspace) || fromWorkspace);
   if (!toWorkspace || toWorkspace === fromWorkspace) return;
-  if (!confirm(`把 ${name} 从「${fromWorkspace}」移动到「${toWorkspace}」？`)) return;
   await api('/api/workspaces/move', {
     method: 'POST',
     body: JSON.stringify({ fromWorkspace, itemName: name, toWorkspace })
@@ -698,7 +806,7 @@ function renderPrompts() {
   state.prompts.forEach((prompt) => {
     const button = document.createElement('button');
     button.className = `stack-item ${prompt.id === state.activePromptId ? 'active' : ''}`;
-    button.innerHTML = `<h3>${escapeHtml(prompt.name)}</h3><p>${prompt.messages?.length || 0} 条 / ${formatDate(prompt.updatedAt)}</p>`;
+    button.innerHTML = `<h3>${escapeHtml(prompt.name)}</h3><p>${prompt.messages?.length || 0} 块 / ${formatDate(prompt.updatedAt)}</p>`;
     button.addEventListener('click', () => fillPromptForm(prompt));
     list.appendChild(button);
   });
@@ -709,61 +817,77 @@ function renderPrompts() {
 function fillPromptForm(prompt = {}) {
   $('#promptId').value = prompt.id || '';
   $('#promptName').value = prompt.name || '';
+  $('#importPreview').innerHTML = '';
   renderPromptMessages(prompt.messages || []);
+}
+
+function blockTypeOptions(selected) {
+  return BLOCK_TYPES.map(([value, label]) => `<option value="${value}" ${value === selected ? 'selected' : ''}>${label}</option>`).join('');
+}
+
+function roleOptions(selected) {
+  return ROLES.map((role) => `<option value="${role}" ${role === selected ? 'selected' : ''}>${role}</option>`).join('');
 }
 
 function renderPromptMessages(messages) {
   const list = $('#promptMessageList');
   list.innerHTML = '';
-  messages
-    .slice()
-    .sort((a, b) => a.order - b.order)
-    .forEach((message) => addPromptMessage(message));
+  messages.slice().sort((a, b) => a.order - b.order).forEach((message) => addPromptMessage(message));
+  if (state.promptSortable) state.promptSortable.destroy();
+  state.promptSortable = new Sortable(list, {
+    animation: 160,
+    handle: '.drag-handle',
+    ghostClass: 'drag-ghost'
+  });
 }
 
 function addPromptMessage(message = {}) {
   const list = $('#promptMessageList');
+  const type = message.type || $('#newPromptType')?.value || 'normal';
+  const locked = message.locked || LOCKED_TYPES.has(type);
   const row = document.createElement('article');
-  row.className = 'prompt-message';
-  row.draggable = true;
+  row.className = `prompt-message type-${type}`;
   row.dataset.id = message.id || `new_${Date.now()}_${Math.random()}`;
+  row.dataset.locked = locked ? 'true' : 'false';
   row.innerHTML = `
     <div class="prompt-message-head">
       <span class="drag-handle">拖动</span>
-      <select data-field="role">${ROLES.map((role) => `<option value="${role}">${role}</option>`).join('')}</select>
-      <input data-field="title" placeholder="提示词名称" value="${escapeHtml(message.title || '新提示词')}">
+      <select data-field="type">${blockTypeOptions(type)}</select>
+      <select data-field="role">${roleOptions(message.role || 'system')}</select>
+      <input data-field="title" placeholder="提示词名称" value="${escapeHtml(message.title || BLOCK_TYPES.find(([value]) => value === type)?.[1] || '新提示词')}">
       <label class="toggle"><input data-field="enabled" type="checkbox" ${message.enabled === false ? '' : 'checked'}>启用</label>
       <button type="button" class="mini-button danger" data-action="remove">删除</button>
     </div>
-    <textarea data-field="content" rows="7">${escapeHtml(message.content || '')}</textarea>
+    <textarea data-field="content" rows="7" ${locked ? 'disabled' : ''} placeholder="${locked ? '运行时自动插入，不能编辑内容' : '输入提示词内容'}">${escapeHtml(locked ? '' : message.content || '')}</textarea>
   `;
-  row.querySelector('[data-field="role"]').value = message.role || 'system';
   row.querySelector('[data-action="remove"]').addEventListener('click', () => row.remove());
-  row.addEventListener('dragstart', (event) => {
-    event.dataTransfer.setData('text/plain', row.dataset.id);
-    row.classList.add('dragging');
-  });
-  row.addEventListener('dragend', () => row.classList.remove('dragging'));
-  row.addEventListener('dragover', (event) => {
-    event.preventDefault();
-    const dragging = $('.prompt-message.dragging');
-    if (!dragging || dragging === row) return;
-    const rect = row.getBoundingClientRect();
-    const before = event.clientY < rect.top + rect.height / 2;
-    list.insertBefore(dragging, before ? row : row.nextSibling);
+  row.querySelector('[data-field="type"]').addEventListener('change', (event) => {
+    const nextType = event.target.value;
+    const isLocked = LOCKED_TYPES.has(nextType);
+    row.dataset.locked = isLocked ? 'true' : 'false';
+    row.className = `prompt-message type-${nextType}`;
+    const textarea = row.querySelector('[data-field="content"]');
+    textarea.disabled = isLocked;
+    if (isLocked) textarea.value = '';
   });
   list.appendChild(row);
 }
 
 function collectPromptMessages() {
-  return $$('#promptMessageList .prompt-message').map((row, index) => ({
-    id: row.dataset.id.startsWith('new_') ? undefined : row.dataset.id,
-    role: row.querySelector('[data-field="role"]').value,
-    title: row.querySelector('[data-field="title"]').value.trim() || `提示词 ${index + 1}`,
-    content: row.querySelector('[data-field="content"]').value,
-    enabled: row.querySelector('[data-field="enabled"]').checked,
-    order: (index + 1) * 10
-  }));
+  return $$('#promptMessageList .prompt-message').map((row, index) => {
+    const type = row.querySelector('[data-field="type"]').value;
+    const locked = LOCKED_TYPES.has(type);
+    return {
+      id: row.dataset.id.startsWith('new_') ? undefined : row.dataset.id,
+      type,
+      role: row.querySelector('[data-field="role"]').value,
+      title: row.querySelector('[data-field="title"]').value.trim() || `提示词 ${index + 1}`,
+      content: locked ? '' : row.querySelector('[data-field="content"]').value,
+      enabled: row.querySelector('[data-field="enabled"]').checked,
+      locked,
+      order: (index + 1) * 10
+    };
+  });
 }
 
 async function savePrompt(event) {
@@ -783,8 +907,24 @@ async function savePrompt(event) {
   toast('预设已保存');
 }
 
+async function importStPreset(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  const json = JSON.parse(await file.text());
+  const result = await api('/api/prompts/import-st', { method: 'POST', body: JSON.stringify(json) });
+  $('#importPreview').innerHTML = `
+    <strong>已导入 ${escapeHtml(result.prompt.name)}</strong>
+    <p>${result.mapping.map((item) => `${item.identifier || item.title} → ${item.type}${item.enabled ? '' : '（禁用）'}`).join(' / ')}</p>
+  `;
+  await loadPrompts();
+  fillPromptForm(result.prompt);
+  toast('ST 预设已导入');
+  event.target.value = '';
+}
+
 function wireEvents() {
   $$('.tab-button').forEach((button) => button.addEventListener('click', () => setTab(button.dataset.tab)));
+  $('#fullscreenFab').addEventListener('click', requestLandscapeFullscreen);
   $('#newConversationBtn').addEventListener('click', () => createConversation().catch((error) => toast(error.message, 'error')));
   $('#saveTitleBtn').addEventListener('click', () => saveTitle().catch((error) => toast(error.message, 'error')));
   $('#sendBtn').addEventListener('click', () => sendMessage().catch((error) => toast(error.message, 'error')));
@@ -797,7 +937,8 @@ function wireEvents() {
   $('#refreshPreviewBtn').addEventListener('click', () => refreshPreview().catch((error) => toast(error.message, 'error')));
   $('#exportJsonBtn').addEventListener('click', () => exportCard(false).catch((error) => toast(error.message, 'error')));
   $('#exportPngBtn').addEventListener('click', () => exportCard(true).catch((error) => toast(error.message, 'error')));
-  $('#searchImagesBtn').addEventListener('click', () => searchImages().catch((error) => toast(error.message, 'error')));
+  $('#searchImagesBtn').addEventListener('click', () => searchImages(true).catch((error) => toast(error.message, 'error')));
+  $('#loadMoreImagesBtn').addEventListener('click', () => searchImages(false).catch((error) => toast(error.message, 'error')));
   $('#webSearchBtn').addEventListener('click', () => webSearch().catch((error) => toast(error.message, 'error')));
   $('#createWorkspaceBtn').addEventListener('click', () => createOrSwitchWorkspace().catch((error) => toast(error.message, 'error')));
   $('#renameWorkspaceBtn').addEventListener('click', () => renameWorkspace().catch((error) => toast(error.message, 'error')));
@@ -811,7 +952,8 @@ function wireEvents() {
     if (event.target.value) $('#modelIdText').value = event.target.value;
   });
   $('#newPromptBtn').addEventListener('click', () => fillPromptForm({ name: '新预设', messages: [] }));
-  $('#addPromptMessageBtn').addEventListener('click', () => addPromptMessage({ role: 'system', title: '新提示词', content: '', enabled: true }));
+  $('#addPromptMessageBtn').addEventListener('click', () => addPromptMessage({ type: $('#newPromptType').value, role: 'system', enabled: true }));
+  $('#stPresetInput').addEventListener('change', (event) => importStPreset(event).catch((error) => toast(error.message, 'error')));
   $('#promptForm').addEventListener('submit', (event) => savePrompt(event).catch((error) => toast(error.message, 'error')));
   $('#settingsForm').addEventListener('submit', (event) => saveSettings(event).catch((error) => toast(error.message, 'error')));
 }
@@ -820,6 +962,7 @@ async function init() {
   wireEvents();
   await Promise.all([loadHealth(), loadSettings(), loadModels(), loadPrompts()]);
   await loadWorkspaces().catch((error) => toast(error.message, 'error'));
+  await loadCarousel().catch((error) => toast(error.message, 'error'));
   await loadConversations();
 }
 

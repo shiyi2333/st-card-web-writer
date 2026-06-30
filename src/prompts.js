@@ -1,6 +1,18 @@
 import { id, nowIso } from './store.js';
 
 export const ROLE_OPTIONS = ['system', 'developer', 'user', 'assistant'];
+export const PROMPT_BLOCK_TYPES = ['head', 'main', 'skill', 'userPrefix', 'historySlot', 'inputSlot', 'tail', 'normal'];
+
+export const BLOCK_TYPE_LABELS = {
+  head: '固定头部',
+  main: '主提示词',
+  skill: 'skill指导块',
+  userPrefix: '用户输入前缀',
+  historySlot: '对话历史占位',
+  inputSlot: '用户输入占位',
+  tail: '固定尾部',
+  normal: '普通块'
+};
 
 export const CARD_SECTIONS = [
   '名称',
@@ -61,45 +73,40 @@ export const WEB_SEARCH_PROMPT = `当用户需要联网资料时，可以调用 
 
 export const IMAGE_SEARCH_PROMPT = `当用户需要角色卡配图时，可以调用 Danbooru 搜图工具。优先使用角色外貌里的发色、体型和常用服装；服装不明确时用 t-shirt。一次搜索 5 或 10 张，由用户选择。避免重复使用已经用过的 post id。`;
 
+function block(input = {}, index = 0) {
+  const type = PROMPT_BLOCK_TYPES.includes(input.type) ? input.type : 'normal';
+  const locked = input.locked === true || ['historySlot', 'inputSlot'].includes(type);
+  return {
+    id: input.id || id('pb'),
+    type,
+    role: ROLE_OPTIONS.includes(input.role) ? input.role : 'system',
+    title: input.title || BLOCK_TYPE_LABELS[type] || `提示词 ${index + 1}`,
+    content: locked ? '' : String(input.content || ''),
+    enabled: input.enabled !== false,
+    locked,
+    order: Number(input.order ?? (index + 1) * 10),
+    identifier: input.identifier || ''
+  };
+}
+
 export function makeDefaultPromptSet(createdAt = nowIso()) {
+  const blocks = [
+    block({ type: 'head', role: 'system', title: '输出格式头部', content: '你正在生成 SillyTavern 角色卡。除 Markdown 角色卡正文外，不要输出解释、寒暄或 JSON。', order: 10 }),
+    block({ type: 'main', role: 'system', title: '龙虾写卡主规则', content: LOBSTER_CARD_PROMPT, order: 20 }),
+    block({ type: 'skill', role: 'developer', title: '单区块重写 skill', content: SECTION_REWRITE_PROMPT, order: 30 }),
+    block({ type: 'skill', role: 'developer', title: '搜图 skill', content: IMAGE_SEARCH_PROMPT, order: 40 }),
+    block({ type: 'skill', role: 'developer', title: '网页搜索 skill', content: WEB_SEARCH_PROMPT, order: 50 }),
+    block({ type: 'historySlot', role: 'system', title: '对话历史', order: 60 }),
+    block({ type: 'userPrefix', role: 'user', title: '本次请求前缀', content: '请根据下面这次用户请求继续写卡或改卡。', order: 70 }),
+    block({ type: 'inputSlot', role: 'user', title: '用户输入', order: 80 }),
+    block({ type: 'tail', role: 'system', title: '固定尾部', content: '最后再次检查：标题完整、作者备注不是图片来源、标签不超过十个、默认不要状态栏。', order: 90 })
+  ];
+
   return {
     id: id('prompt'),
     name: '龙虾写卡',
-    kind: 'lobsterCardV2',
-    messages: [
-      {
-        id: id('pm'),
-        role: 'system',
-        title: '写卡主规则',
-        content: LOBSTER_CARD_PROMPT,
-        enabled: true,
-        order: 10
-      },
-      {
-        id: id('pm'),
-        role: 'developer',
-        title: '区块重写规则',
-        content: SECTION_REWRITE_PROMPT,
-        enabled: true,
-        order: 20
-      },
-      {
-        id: id('pm'),
-        role: 'developer',
-        title: '搜图工具规则',
-        content: IMAGE_SEARCH_PROMPT,
-        enabled: true,
-        order: 30
-      },
-      {
-        id: id('pm'),
-        role: 'developer',
-        title: '网页搜索规则',
-        content: WEB_SEARCH_PROMPT,
-        enabled: true,
-        order: 40
-      }
-    ],
+    kind: 'lobsterCardV3',
+    messages: blocks,
     createdAt,
     updatedAt: createdAt
   };
@@ -110,18 +117,22 @@ export function defaultStore() {
   const modelId = id('model');
   const prompt = makeDefaultPromptSet(createdAt);
   return {
-    version: 2,
+    version: 3,
     settings: {
       workspaceRoot: 'G:\\角色卡',
       currentWorkspace: '一一',
       tavilyKey: '',
       agentApprovalMode: 'confirm',
-      imageResultCount: 10
+      imageResultCount: 10,
+      theme: 'system',
+      developerRoleMode: 'compat',
+      carouselTags: '1girl solo huge_breasts t-shirt'
     },
     usedImages: {
       global: [],
       workspaces: {}
     },
+    imageCache: [],
     activeModelId: modelId,
     activePromptId: prompt.id,
     models: [
@@ -141,41 +152,46 @@ export function defaultStore() {
   };
 }
 
-export function normalizePrompt(prompt) {
+function migrateLegacyMessage(message = {}, index = 0) {
+  const type = PROMPT_BLOCK_TYPES.includes(message.type)
+    ? message.type
+    : (message.title || '').includes('skill') || (message.title || '').includes('规则') && message.role === 'developer'
+      ? 'skill'
+      : 'main';
+  return block({
+    ...message,
+    type,
+    locked: message.locked,
+    order: Number(message.order ?? (index + 1) * 10)
+  }, index);
+}
+
+export function normalizePrompt(prompt = {}) {
   const createdAt = prompt.createdAt || nowIso();
-  const messages = Array.isArray(prompt.messages) && prompt.messages.length
-    ? prompt.messages
+  let messages = Array.isArray(prompt.messages) && prompt.messages.length
+    ? prompt.messages.map(migrateLegacyMessage)
     : [
-        {
-          id: id('pm'),
-          role: 'system',
-          title: '生成提示词',
-          content: prompt.system || LOBSTER_CARD_PROMPT,
-          enabled: true,
-          order: 10
-        },
-        {
-          id: id('pm'),
-          role: 'developer',
-          title: '单区块修改提示词',
-          content: prompt.rewrite || SECTION_REWRITE_PROMPT,
-          enabled: true,
-          order: 20
-        }
+        block({ type: 'main', role: 'system', title: '生成提示词', content: prompt.system || LOBSTER_CARD_PROMPT, order: 10 }),
+        block({ type: 'skill', role: 'developer', title: '单区块修改提示词', content: prompt.rewrite || SECTION_REWRITE_PROMPT, order: 20 })
       ];
+
+  if (!messages.some((item) => item.type === 'historySlot')) {
+    messages.push(block({ type: 'historySlot', title: '对话历史', order: 900 }));
+  }
+  if (!messages.some((item) => item.type === 'inputSlot')) {
+    messages.push(block({ type: 'inputSlot', title: '用户输入', order: 910 }));
+  }
+
+  messages = messages
+    .map((message, index) => block(message, index))
+    .sort((a, b) => a.order - b.order)
+    .map((message, index) => ({ ...message, order: (index + 1) * 10 }));
 
   return {
     id: prompt.id || id('prompt'),
     name: prompt.name || '角色卡预设',
     kind: prompt.kind || '',
-    messages: messages.map((message, index) => ({
-      id: message.id || id('pm'),
-      role: ROLE_OPTIONS.includes(message.role) ? message.role : 'system',
-      title: message.title || `提示词 ${index + 1}`,
-      content: String(message.content || ''),
-      enabled: message.enabled !== false,
-      order: Number(message.order ?? (index + 1) * 10)
-    })).sort((a, b) => a.order - b.order),
+    messages,
     createdAt,
     updatedAt: prompt.updatedAt || createdAt
   };
@@ -191,14 +207,21 @@ export function normalizePromptForSave(input = {}) {
   });
 }
 
-export function buildMessages({ prompt, conversation, userText, section = '' }) {
-  const promptMessages = normalizePrompt(prompt).messages
-    .filter((message) => message.enabled && message.content.trim())
-    .map((message) => ({
-      role: message.role === 'developer' ? 'system' : message.role,
-      content: message.content
-    }));
+function mapRole(role, developerRoleMode = 'compat') {
+  if (role === 'developer' && developerRoleMode !== 'native') return 'system';
+  return role;
+}
 
+function messageFromBlock(blockItem, developerRoleMode) {
+  return {
+    role: mapRole(blockItem.role, developerRoleMode),
+    content: blockItem.content
+  };
+}
+
+export function buildMessages({ prompt, conversation, userText, section = '', developerRoleMode = 'compat' }) {
+  const normalized = normalizePrompt(prompt);
+  const blocks = normalized.messages.filter((item) => item.enabled !== false);
   const history = (conversation?.messages || [])
     .filter((message) => ['user', 'assistant'].includes(message.role))
     .map((message) => ({
@@ -207,9 +230,108 @@ export function buildMessages({ prompt, conversation, userText, section = '' }) 
     }));
 
   const sectionPrefix = section ? `【目标区块：${section}】\n` : '';
-  return [
-    ...promptMessages,
-    ...history,
-    { role: 'user', content: `${sectionPrefix}${userText}` }
-  ];
+  const output = [];
+  let historyInserted = false;
+  let inputInserted = false;
+  let userPrefix = '';
+
+  const insertHistory = () => {
+    if (historyInserted) return;
+    output.push(...history);
+    historyInserted = true;
+  };
+
+  const insertInput = () => {
+    if (inputInserted) return;
+    output.push({
+      role: 'user',
+      content: `${userPrefix}${userPrefix ? '\n\n' : ''}${sectionPrefix}${userText}`
+    });
+    inputInserted = true;
+  };
+
+  for (const item of blocks) {
+    if (item.type === 'historySlot') {
+      insertHistory();
+      continue;
+    }
+    if (item.type === 'inputSlot') {
+      if (!historyInserted) insertHistory();
+      insertInput();
+      continue;
+    }
+    if (item.type === 'userPrefix') {
+      if (item.content.trim()) userPrefix += `${userPrefix ? '\n\n' : ''}${item.content.trim()}`;
+      continue;
+    }
+    if (item.content.trim()) output.push(messageFromBlock(item, developerRoleMode));
+  }
+
+  if (!historyInserted) insertHistory();
+  if (!inputInserted) insertInput();
+  return output;
+}
+
+function blockTypeForIdentifier(identifier = '', marker = false) {
+  if (identifier === 'chatHistory') return 'historySlot';
+  if (identifier === 'main') return 'main';
+  if (identifier === 'jailbreak' || identifier === 'nsfw') return 'tail';
+  if (identifier === 'dialogueExamples' || identifier === 'charDescription' || identifier === 'charPersonality' || identifier === 'scenario' || identifier === 'worldInfoBefore' || identifier === 'worldInfoAfter') return 'skill';
+  if (marker) return 'normal';
+  return 'normal';
+}
+
+export function importSillyTavernPreset(input = {}) {
+  if (!Array.isArray(input.prompts)) {
+    const error = new Error('不是 SillyTavern OpenAI preset：缺少 prompts 数组');
+    error.status = 400;
+    throw error;
+  }
+
+  const prompts = new Map(input.prompts.map((prompt) => [prompt.identifier || prompt.name, prompt]));
+  const ordered = Array.isArray(input.prompt_order?.[0]?.order)
+    ? input.prompt_order[0].order
+    : input.prompts.map((prompt) => ({ identifier: prompt.identifier || prompt.name, enabled: true }));
+
+  const blocks = [];
+  const mapping = [];
+  for (const item of ordered) {
+    const source = prompts.get(item.identifier);
+    const marker = source?.marker === true || source?.content === undefined;
+    const type = blockTypeForIdentifier(item.identifier, marker);
+    const title = source?.name || item.identifier || 'ST Prompt';
+    blocks.push(block({
+      type,
+      role: ROLE_OPTIONS.includes(source?.role) ? source.role : 'system',
+      title,
+      content: marker ? '' : String(source?.content || ''),
+      enabled: item.enabled !== false,
+      locked: type === 'historySlot',
+      identifier: item.identifier
+    }, blocks.length));
+    mapping.push({
+      identifier: item.identifier,
+      title,
+      type,
+      enabled: item.enabled !== false,
+      marker
+    });
+  }
+
+  if (!blocks.some((item) => item.type === 'inputSlot')) {
+    blocks.push(block({ type: 'inputSlot', title: '用户输入', order: (blocks.length + 1) * 10 }, blocks.length));
+    mapping.push({ identifier: 'inputSlot', title: '用户输入', type: 'inputSlot', enabled: true, marker: true });
+  }
+
+  const now = nowIso();
+  const prompt = normalizePrompt({
+    id: id('prompt'),
+    name: input.name || input.preset_name || '导入的 ST 预设',
+    kind: 'st-import',
+    messages: blocks,
+    createdAt: now,
+    updatedAt: now
+  });
+
+  return { prompt, mapping };
 }

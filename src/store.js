@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
-const STORE_VERSION = 2;
+const STORE_VERSION = 3;
 
 export function nowIso() {
   return new Date().toISOString();
@@ -39,6 +39,7 @@ export class JsonStore {
     this.data.usedImages ||= { global: [], workspaces: {} };
     this.data.usedImages.global ||= [];
     this.data.usedImages.workspaces ||= {};
+    this.data.imageCache ||= [];
     this.data.models ||= [];
     this.data.activeModelId ||= null;
     this.data.prompts ||= [];

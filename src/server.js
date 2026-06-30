@@ -4,7 +4,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { JsonStore, id, maskKey, nowIso } from './store.js';
-import { defaultStore, buildMessages, makeDefaultPromptSet, normalizePrompt, normalizePromptForSave } from './prompts.js';
+import { defaultStore, buildMessages, importSillyTavernPreset, makeDefaultPromptSet, normalizePrompt, normalizePromptForSave } from './prompts.js';
 import { chatStream, fetchModels } from './ai.js';
 import { latestAssistantMarkdown, makeCardJson, previewFromMarkdown } from './card.js';
 import { writeCardPng } from './png.js';
@@ -96,18 +96,22 @@ function requireBody(req, names) {
 
 async function migrateStore() {
   await store.mutate((data) => {
-    data.version = 2;
+    data.version = 3;
     data.settings ||= {};
     data.settings.workspaceRoot ||= 'G:\\角色卡';
     data.settings.currentWorkspace ||= '一一';
     data.settings.tavilyKey ||= process.env.TAVILY_API_KEY || '';
     data.settings.agentApprovalMode ||= 'confirm';
     data.settings.imageResultCount ||= 10;
+    data.settings.theme ||= 'system';
+    data.settings.developerRoleMode ||= 'compat';
+    data.settings.carouselTags ||= '1girl solo huge_breasts t-shirt';
     data.usedImages ||= { global: [], workspaces: {} };
     data.usedImages.global ||= [];
     data.usedImages.workspaces ||= {};
+    data.imageCache ||= [];
     data.prompts = (data.prompts || []).map(normalizePrompt);
-    if (!data.prompts.some((prompt) => prompt.kind === 'lobsterCardV2')) {
+    if (!data.prompts.some((prompt) => prompt.kind === 'lobsterCardV3')) {
       const defaultPrompt = makeDefaultPromptSet();
       data.prompts.unshift(defaultPrompt);
       data.activePromptId = defaultPrompt.id;
@@ -193,6 +197,9 @@ app.put('/api/settings', async (req, res) => {
     if (req.body.tavilyKey !== undefined) data.settings.tavilyKey = String(req.body.tavilyKey || '');
     if (req.body.agentApprovalMode !== undefined) data.settings.agentApprovalMode = req.body.agentApprovalMode === 'auto' ? 'auto' : 'confirm';
     if (req.body.imageResultCount !== undefined) data.settings.imageResultCount = Number(req.body.imageResultCount) === 5 ? 5 : 10;
+    if (req.body.theme !== undefined) data.settings.theme = ['light', 'dark', 'system'].includes(req.body.theme) ? req.body.theme : 'system';
+    if (req.body.developerRoleMode !== undefined) data.settings.developerRoleMode = req.body.developerRoleMode === 'native' ? 'native' : 'compat';
+    if (req.body.carouselTags !== undefined) data.settings.carouselTags = String(req.body.carouselTags || '').trim() || '1girl solo huge_breasts t-shirt';
   });
   await ensureWorkspace(store.data.settings);
   res.json(safeSettings());
@@ -289,6 +296,19 @@ app.post('/api/prompts', async (req, res, next) => {
       data.activePromptId = prompt.id;
     });
     res.json({ prompt, activeId: prompt.id });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/prompts/import-st', async (req, res, next) => {
+  try {
+    const { prompt, mapping } = importSillyTavernPreset(req.body || {});
+    await store.mutate((data) => {
+      data.prompts.push(prompt);
+      data.activePromptId = prompt.id;
+    });
+    res.json({ prompt, mapping, activeId: prompt.id });
   } catch (error) {
     next(error);
   }
@@ -432,7 +452,8 @@ app.post('/api/chat', async (req, res, next) => {
       prompt,
       conversation: { ...conversation, messages: conversation.messages.slice(0, -1) },
       userText: req.body.message,
-      section: req.body.section || ''
+      section: req.body.section || '',
+      developerRoleMode: store.data.settings.developerRoleMode || 'compat'
     });
     await chatStream({
       config: model,
@@ -660,9 +681,47 @@ app.post('/api/images/search', async (req, res, next) => {
     const payload = await searchDanbooru({
       tags: req.body.tags || '',
       limit: req.body.limit || store.data.settings.imageResultCount,
-      usedIds
+      usedIds,
+      page: req.body.page || 1,
+      offset: req.body.offset || 0
+    });
+    await store.mutate((data) => {
+      const ids = new Set((data.imageCache || []).map((item) => String(item.id)));
+      data.imageCache ||= [];
+      for (const image of payload.results) {
+        if (!ids.has(String(image.id))) data.imageCache.unshift(image);
+      }
+      data.imageCache = data.imageCache.slice(0, 80);
     });
     res.json({ ...payload, usedIds });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/images/carousel', async (req, res, next) => {
+  try {
+    const tags = req.query.tags || store.data.settings.carouselTags || '1girl solo huge_breasts t-shirt';
+    try {
+      const payload = await searchDanbooru({ tags, limit: 10, usedIds: [], page: 1, includeUsed: true });
+      await store.mutate((data) => {
+        data.imageCache ||= [];
+        const ids = new Set(data.imageCache.map((item) => String(item.id)));
+        for (const image of payload.results) {
+          if (!ids.has(String(image.id))) data.imageCache.unshift(image);
+        }
+        data.imageCache = data.imageCache.slice(0, 80);
+      });
+      res.json({ ...payload, source: 'live' });
+    } catch (error) {
+      res.json({
+        tags: String(tags).split(/\s+/).filter(Boolean),
+        queryTags: [],
+        results: store.data.imageCache || [],
+        source: 'cache',
+        warning: error.message
+      });
+    }
   } catch (error) {
     next(error);
   }
@@ -718,7 +777,15 @@ app.post('/api/agent/actions', async (req, res, next) => {
     if (!conversation) return res.status(404).json({ error: '对话不存在' });
     let result;
     if (req.body.action === 'image-search') {
-      result = await searchDanbooru({ tags: req.body.tags, limit: req.body.limit || 10, usedIds: workspaceUsedImageIds() });
+      result = await searchDanbooru({ tags: req.body.tags, limit: req.body.limit || 10, usedIds: workspaceUsedImageIds(), page: req.body.page || 1, offset: req.body.offset || 0 });
+      await store.mutate((data) => {
+        data.imageCache ||= [];
+        const ids = new Set(data.imageCache.map((item) => String(item.id)));
+        for (const image of result.results) {
+          if (!ids.has(String(image.id))) data.imageCache.unshift(image);
+        }
+        data.imageCache = data.imageCache.slice(0, 80);
+      });
     } else if (req.body.action === 'web-search') {
       result = await tavilySearch({ apiKey: store.data.settings.tavilyKey, query: req.body.query, maxResults: req.body.maxResults || 5 });
     } else if (req.body.action === 'export-card') {
