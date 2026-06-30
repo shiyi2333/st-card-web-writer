@@ -4,13 +4,14 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { JsonStore, id, maskKey, nowIso } from './store.js';
-import { defaultStore, buildMessages, importSillyTavernPreset, makeDefaultPromptSet, normalizePrompt, normalizePromptForSave } from './prompts.js';
+import { defaultStore, buildMessages, ensurePromptSkillCatalog, importSillyTavernPreset, makeDefaultPromptSet, normalizePrompt, normalizePromptForSave } from './prompts.js';
 import { chatStream, fetchModels } from './ai.js';
 import { latestAssistantMarkdown, makeCardJson, previewFromMarkdown } from './card.js';
 import { writeCardPng } from './png.js';
 import {
   ensureInside,
   ensureWorkspace,
+  defaultWorkspaceRoot,
   listWorkspaceFiles,
   listWorkspaces,
   moveWorkspaceItem,
@@ -22,6 +23,7 @@ import {
   writeWorkspaceArtifact
 } from './workspace.js';
 import { searchDanbooru, tavilySearch } from './search.js';
+import { SKILL_CATALOG } from './skills.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -29,13 +31,13 @@ const publicDir = path.join(rootDir, 'public');
 const exportDir = path.resolve(process.env.EXPORT_DIR || path.join(rootDir, 'exports'));
 const store = new JsonStore(process.env.STORE_PATH || path.join(rootDir, 'data', 'store.json'));
 
-await store.init(defaultStore());
+await store.init(defaultStore({ workspaceRoot: defaultWorkspaceRoot() }));
 await migrateStore();
 await ensureDefaultWorkspaces();
 await fs.mkdir(exportDir, { recursive: true });
 
 const app = express();
-const port = Number(process.env.PORT || 5678);
+const port = Number(process.env.PORT || 5679);
 const host = process.env.HOST || '0.0.0.0';
 
 app.use(express.json({ limit: '30mb' }));
@@ -98,7 +100,9 @@ async function migrateStore() {
   await store.mutate((data) => {
     data.version = 3;
     data.settings ||= {};
-    data.settings.workspaceRoot ||= 'G:\\角色卡';
+    if (!data.settings.workspaceRoot || (process.platform !== 'win32' && /^G:\\/i.test(data.settings.workspaceRoot))) {
+      data.settings.workspaceRoot = defaultWorkspaceRoot();
+    }
     data.settings.currentWorkspace ||= '一一';
     data.settings.tavilyKey ||= process.env.TAVILY_API_KEY || '';
     data.settings.agentApprovalMode ||= 'confirm';
@@ -110,7 +114,7 @@ async function migrateStore() {
     data.usedImages.global ||= [];
     data.usedImages.workspaces ||= {};
     data.imageCache ||= [];
-    data.prompts = (data.prompts || []).map(normalizePrompt);
+    data.prompts = (data.prompts || []).map((prompt) => ensurePromptSkillCatalog(normalizePrompt(prompt)));
     if (!data.prompts.some((prompt) => prompt.kind === 'lobsterCardV3')) {
       const defaultPrompt = makeDefaultPromptSet();
       data.prompts.unshift(defaultPrompt);
@@ -186,6 +190,18 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+app.get('/api/device-paths', (req, res) => {
+  res.json({
+    platform: process.platform,
+    defaultWorkspaceRoot: defaultWorkspaceRoot(),
+    activeWorkspaceRoot: workspaceRoot(store.data.settings)
+  });
+});
+
+app.get('/api/skills', (req, res) => {
+  res.json({ skills: SKILL_CATALOG });
+});
+
 app.get('/api/settings', (req, res) => {
   res.json(safeSettings());
 });
@@ -200,6 +216,7 @@ app.put('/api/settings', async (req, res) => {
     if (req.body.theme !== undefined) data.settings.theme = ['light', 'dark', 'system'].includes(req.body.theme) ? req.body.theme : 'system';
     if (req.body.developerRoleMode !== undefined) data.settings.developerRoleMode = req.body.developerRoleMode === 'native' ? 'native' : 'compat';
     if (req.body.carouselTags !== undefined) data.settings.carouselTags = String(req.body.carouselTags || '').trim() || '1girl solo huge_breasts t-shirt';
+    if (req.body.useDeviceDefaultWorkspaceRoot) data.settings.workspaceRoot = defaultWorkspaceRoot();
   });
   await ensureWorkspace(store.data.settings);
   res.json(safeSettings());
@@ -435,6 +452,7 @@ app.post('/api/chat', async (req, res, next) => {
       role: 'user',
       content: req.body.message,
       section: req.body.section || '',
+      skills: Array.isArray(req.body.selectedSkills) ? req.body.selectedSkills.map(String) : [],
       createdAt: nowIso(),
       editHistory: [],
       tools: []
@@ -453,7 +471,8 @@ app.post('/api/chat', async (req, res, next) => {
       conversation: { ...conversation, messages: conversation.messages.slice(0, -1) },
       userText: req.body.message,
       section: req.body.section || '',
-      developerRoleMode: store.data.settings.developerRoleMode || 'compat'
+      developerRoleMode: store.data.settings.developerRoleMode || 'compat',
+      selectedSkills: req.body.selectedSkills || []
     });
     await chatStream({
       config: model,

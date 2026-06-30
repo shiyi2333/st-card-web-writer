@@ -31,6 +31,8 @@ const state = {
   workspaces: [],
   files: [],
   lastUserText: '',
+  skills: [],
+  selectedSkills: [],
   imageSearch: {
     tags: '',
     page: 1,
@@ -104,21 +106,24 @@ function setTab(name) {
   $(`#${name}Panel`)?.classList.add('active');
 }
 
-async function requestLandscapeFullscreen() {
+async function requestFullscreenMode(orientation = 'landscape') {
   try {
     if (!document.fullscreenElement) {
       await document.documentElement.requestFullscreen?.();
     }
     try {
-      await screen.orientation?.lock?.('landscape');
-      toast('已进入横屏全屏');
+      await screen.orientation?.lock?.(orientation);
+      toast(orientation === 'portrait' ? '已进入竖屏全屏' : '已进入横屏全屏');
     } catch {
-      toast('已全屏；如果没有横屏，请手动旋转手机');
+      toast('已全屏；如果方向没有切换，请手动旋转手机');
     }
   } catch (error) {
     toast(`全屏失败: ${error.message}`, 'error');
   }
 }
+
+const requestLandscapeFullscreen = () => requestFullscreenMode('landscape');
+const requestPortraitFullscreen = () => requestFullscreenMode('portrait');
 
 async function loadHealth() {
   const health = await api('/api/health');
@@ -165,6 +170,58 @@ async function saveSettings(event) {
   toast('设置已保存');
 }
 
+async function useDeviceWorkspaceRoot() {
+  const payload = await api('/api/device-paths');
+  $('#workspaceRootInput').value = payload.defaultWorkspaceRoot;
+  toast('已填入设备默认目录，保存设置后生效');
+}
+
+async function loadSkills() {
+  const payload = await api('/api/skills');
+  state.skills = payload.skills || [];
+  renderSkillPicker();
+}
+
+function renderSkillPicker() {
+  const select = $('#skillSelect');
+  if (!select) return;
+  select.innerHTML = '<option value="">选择本轮 skill</option>';
+  state.skills.forEach((skill) => {
+    const option = document.createElement('option');
+    option.value = skill.id;
+    option.textContent = `${skill.name} · ${skill.category}`;
+    option.title = skill.description;
+    select.appendChild(option);
+  });
+  renderSelectedSkills();
+}
+
+function addSelectedSkill() {
+  const id = $('#skillSelect').value;
+  if (!id || state.selectedSkills.includes(id)) return;
+  state.selectedSkills.push(id);
+  renderSelectedSkills();
+}
+
+function renderSelectedSkills() {
+  const row = $('#selectedSkillRow');
+  if (!row) return;
+  row.innerHTML = '';
+  state.selectedSkills.forEach((skillId) => {
+    const skill = state.skills.find((item) => item.id === skillId);
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'skill-chip';
+    chip.title = '点击移除本轮 skill';
+    chip.textContent = skill ? skill.name : skillId;
+    chip.addEventListener('click', () => {
+      state.selectedSkills = state.selectedSkills.filter((item) => item !== skillId);
+      renderSelectedSkills();
+    });
+    row.appendChild(chip);
+  });
+}
+
 async function loadCarousel() {
   const tags = encodeURIComponent(state.settings.carouselTags || '1girl solo huge_breasts t-shirt');
   const payload = await api(`/api/images/carousel?tags=${tags}`);
@@ -184,7 +241,7 @@ function renderCarousel(images, source, warning) {
   images.slice(0, 10).forEach((image) => {
     const slide = document.createElement('div');
     slide.className = 'swiper-slide';
-    const imgUrl = image.previewUrl || image.sampleUrl || image.fileUrl;
+    const imgUrl = image.sampleUrl || image.previewUrl || image.fileUrl;
     slide.innerHTML = `
       <img src="/api/images/proxy?url=${encodeURIComponent(imgUrl)}" alt="Danbooru ${image.id}">
       <div class="carousel-caption">
@@ -301,9 +358,12 @@ function renderMessages() {
         </div>
       `;
     } else {
+      const skillNames = (message.skills || [])
+        .map((skillId) => state.skills.find((skill) => skill.id === skillId)?.name || skillId)
+        .join('、');
       item.innerHTML = `
         <div class="role">
-          <span>${messageRoleName(message.role)}${message.section ? ` · ${escapeHtml(message.section)}` : ''}</span>
+          <span>${messageRoleName(message.role)}${message.section ? ` · ${escapeHtml(message.section)}` : ''}${skillNames ? ` · ${escapeHtml(skillNames)}` : ''}</span>
           <span>${formatDate(message.createdAt)}</span>
         </div>
         <div class="message-markdown">${markdownHtml(message.content)}</div>
@@ -384,7 +444,8 @@ async function sendMessage(textOverride = '') {
   state.lastUserText = content;
   input.value = '';
 
-  const tempUser = { id: `tmp_${Date.now()}`, role: 'user', content, section: state.selectedSection, createdAt: new Date().toISOString() };
+  const selectedSkills = [...state.selectedSkills];
+  const tempUser = { id: `tmp_${Date.now()}`, role: 'user', content, section: state.selectedSection, skills: selectedSkills, createdAt: new Date().toISOString() };
   const tempAssistant = { id: `stream_${Date.now()}`, role: 'assistant', content: '', section: state.selectedSection, createdAt: new Date().toISOString() };
   state.currentConversation.messages.push(tempUser, tempAssistant);
   renderMessages();
@@ -392,7 +453,7 @@ async function sendMessage(textOverride = '') {
   const response = await fetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ conversationId: state.currentConversation.id, message: content, section: state.selectedSection })
+    body: JSON.stringify({ conversationId: state.currentConversation.id, message: content, section: state.selectedSection, selectedSkills })
   });
   if (!response.ok) {
     const err = await response.json().catch(() => ({}));
@@ -424,6 +485,8 @@ async function sendMessage(textOverride = '') {
       }
     }
   }
+  state.selectedSkills = [];
+  renderSelectedSkills();
   await loadConversations();
 }
 
@@ -956,6 +1019,8 @@ async function importStPreset(event) {
 function wireEvents() {
   $$('.tab-button').forEach((button) => button.addEventListener('click', () => setTab(button.dataset.tab)));
   $('#fullscreenFab').addEventListener('click', requestLandscapeFullscreen);
+  $('#portraitFullscreenFab').addEventListener('click', requestPortraitFullscreen);
+  $('#addSkillBtn').addEventListener('click', addSelectedSkill);
   $('#newConversationBtn').addEventListener('click', () => createConversation().catch((error) => toast(error.message, 'error')));
   $('#saveTitleBtn').addEventListener('click', () => saveTitle().catch((error) => toast(error.message, 'error')));
   $('#sendBtn').addEventListener('click', () => sendMessage().catch((error) => toast(error.message, 'error')));
@@ -987,11 +1052,12 @@ function wireEvents() {
   $('#stPresetInput').addEventListener('change', (event) => importStPreset(event).catch((error) => toast(error.message, 'error')));
   $('#promptForm').addEventListener('submit', (event) => savePrompt(event).catch((error) => toast(error.message, 'error')));
   $('#settingsForm').addEventListener('submit', (event) => saveSettings(event).catch((error) => toast(error.message, 'error')));
+  $('#useDeviceRootBtn').addEventListener('click', () => useDeviceWorkspaceRoot().catch((error) => toast(error.message, 'error')));
 }
 
 async function init() {
   wireEvents();
-  await Promise.all([loadHealth(), loadSettings(), loadModels(), loadPrompts()]);
+  await Promise.all([loadHealth(), loadSettings(), loadModels(), loadPrompts(), loadSkills()]);
   await loadWorkspaces().catch((error) => toast(error.message, 'error'));
   await loadCarousel().catch((error) => toast(error.message, 'error'));
   await loadConversations();

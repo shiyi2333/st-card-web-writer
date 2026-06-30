@@ -1,4 +1,6 @@
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 const INVALID_NAME = /[<>:"/\\|?*\x00-\x1F]/g;
@@ -10,8 +12,21 @@ export function safeFileName(value, fallback = 'item') {
     .trim() || fallback;
 }
 
+export function defaultWorkspaceRoot() {
+  if (process.platform === 'win32') return 'G:\\角色卡';
+
+  const home = os.homedir();
+  const candidates = [
+    [path.join(home, 'storage', 'downloads'), path.join(home, 'storage', 'downloads', '角色卡')],
+    [path.join(home, 'storage', 'shared', 'Download'), path.join(home, 'storage', 'shared', 'Download', '角色卡')],
+    [path.join(home, 'Downloads'), path.join(home, 'Downloads', '角色卡')]
+  ];
+  const found = candidates.find(([base]) => fsSync.existsSync(base));
+  return found ? found[1] : path.join(home, '角色卡');
+}
+
 export function workspaceRoot(settings = {}) {
-  return path.resolve(settings.workspaceRoot || 'G:\\角色卡');
+  return path.resolve(settings.workspaceRoot || defaultWorkspaceRoot());
 }
 
 export function ensureInside(root, target) {

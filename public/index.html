@@ -15,7 +15,7 @@
           <span class="brand-mark">ST</span>
           <div>
             <h1>写卡器</h1>
-            <p id="healthLine">localhost:5678</p>
+            <p id="healthLine">localhost:5679</p>
           </div>
           <button id="newConversationBtn" class="icon-button" title="新建对话">+</button>
         </div>
@@ -54,6 +54,11 @@
             <div id="messageList" class="message-list"></div>
           </div>
           <div class="composer">
+            <div class="skill-picker">
+              <select id="skillSelect"></select>
+              <button id="addSkillBtn" type="button" class="ghost-button">使用 skill</button>
+              <div id="selectedSkillRow" class="skill-chip-row"></div>
+            </div>
             <div id="sectionChipRow" class="chip-row"></div>
             <textarea id="messageInput" rows="4" placeholder="输入角色设定、修改要求，或点击预览区块后单独修改"></textarea>
             <div class="composer-actions">
@@ -227,10 +232,11 @@
               <span class="eyebrow">Local</span>
               <h2>本地设置</h2>
             </div>
-            <span class="mode-pill warm">5678</span>
+            <span class="mode-pill warm">5679</span>
           </div>
           <form id="settingsForm" class="settings-grid">
             <label>角色卡根目录<input id="workspaceRootInput" placeholder="G:\角色卡"></label>
+            <button id="useDeviceRootBtn" class="ghost-button" type="button">使用设备默认目录</button>
             <label>Tavily API Key<input id="tavilyKeyInput" type="password" autocomplete="new-password" placeholder="留空则不修改"></label>
             <label>Agent 执行模式
               <select id="agentModeInput">
@@ -264,7 +270,10 @@
       </main>
     </div>
 
-    <button id="fullscreenFab" class="fullscreen-fab">横屏全屏</button>
+    <div class="fullscreen-actions">
+      <button id="fullscreenFab" class="fullscreen-fab">横屏全屏</button>
+      <button id="portraitFullscreenFab" class="fullscreen-fab secondary">竖屏全屏</button>
+    </div>
 
     <nav class="mobile-tabs" id="mobileTabs">
       <button class="tab-button active" data-tab="chat">对话</button>

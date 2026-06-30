@@ -1,6 +1,6 @@
 # ST Card Web Writer
 
-移动端优先的 SillyTavern 角色卡写卡器。适合在 Windows、Linux、Termux 上运行，默认端口 `5678`。
+移动端优先的 SillyTavern 角色卡写卡器。适合在 Windows、Linux、Termux 上运行，默认端口 `5679`。
 
 ## 功能
 
@@ -23,13 +23,21 @@ npm start
 打开：
 
 ```text
-http://localhost:5678
+http://localhost:5679
 ```
+
+也可以直接运行根目录脚本：
+
+```bash
+./start-writer.sh
+```
+
+Windows 可双击 `start-writer.bat`。脚本默认使用 `5679`，如果端口被其他程序占用，会自动尝试后续端口。
 
 局域网访问时用设备 IP：
 
 ```text
-http://<你的设备IP>:5678
+http://<你的设备IP>:5679
 ```
 
 ## 配置
@@ -43,7 +51,7 @@ cp .env.example .env
 默认：
 
 ```text
-PORT=5678
+PORT=5679
 HOST=0.0.0.0
 STORE_PATH=./data/store.json
 EXPORT_DIR=./exports
@@ -55,11 +63,12 @@ EXPORT_DIR=./exports
 pkg install nodejs git
 git clone <repo-url>
 cd st-card-web-writer
-npm install
-npm start
+./start-writer.sh
 ```
 
-然后用手机浏览器打开 `http://127.0.0.1:5678`。
+然后用手机浏览器打开 `http://127.0.0.1:5679`。
+
+如果执行过 `termux-setup-storage`，默认工作区会优先使用 `~/storage/downloads/角色卡`，导出的 PNG/JSON/Markdown 会落在手机下载目录下面。也可以在设置页点“使用设备默认目录”重新填入设备路径。
 
 ## 数据文件
 

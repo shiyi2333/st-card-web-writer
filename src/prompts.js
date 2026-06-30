@@ -1,4 +1,5 @@
 import { id, nowIso } from './store.js';
+import { selectedSkillPrompt, skillCatalogPrompt } from './skills.js';
 
 export const ROLE_OPTIONS = ['system', 'developer', 'user', 'assistant'];
 export const PROMPT_BLOCK_TYPES = ['head', 'main', 'skill', 'userPrefix', 'historySlot', 'inputSlot', 'tail', 'normal'];
@@ -93,13 +94,14 @@ export function makeDefaultPromptSet(createdAt = nowIso()) {
   const blocks = [
     block({ type: 'head', role: 'system', title: '输出格式头部', content: '你正在生成 SillyTavern 角色卡。除 Markdown 角色卡正文外，不要输出解释、寒暄或 JSON。', order: 10 }),
     block({ type: 'main', role: 'system', title: '龙虾写卡主规则', content: LOBSTER_CARD_PROMPT, order: 20 }),
-    block({ type: 'skill', role: 'developer', title: '单区块重写 skill', content: SECTION_REWRITE_PROMPT, order: 30 }),
-    block({ type: 'skill', role: 'developer', title: '搜图 skill', content: IMAGE_SEARCH_PROMPT, order: 40 }),
-    block({ type: 'skill', role: 'developer', title: '网页搜索 skill', content: WEB_SEARCH_PROMPT, order: 50 }),
-    block({ type: 'historySlot', role: 'system', title: '对话历史', order: 60 }),
-    block({ type: 'userPrefix', role: 'user', title: '本次请求前缀', content: '请根据下面这次用户请求继续写卡或改卡。', order: 70 }),
-    block({ type: 'inputSlot', role: 'user', title: '用户输入', order: 80 }),
-    block({ type: 'tail', role: 'system', title: '固定尾部', content: '最后再次检查：标题完整、作者备注不是图片来源、标签不超过十个、默认不要状态栏。', order: 90 })
+    block({ type: 'skill', role: 'developer', title: 'Skill 目录', content: skillCatalogPrompt(), order: 30, identifier: 'skillCatalog' }),
+    block({ type: 'skill', role: 'developer', title: '单区块重写 skill', content: SECTION_REWRITE_PROMPT, order: 40 }),
+    block({ type: 'skill', role: 'developer', title: '搜图 skill', content: IMAGE_SEARCH_PROMPT, order: 50 }),
+    block({ type: 'skill', role: 'developer', title: '网页搜索 skill', content: WEB_SEARCH_PROMPT, order: 60 }),
+    block({ type: 'historySlot', role: 'system', title: '对话历史', order: 70 }),
+    block({ type: 'userPrefix', role: 'user', title: '本次请求前缀', content: '请根据下面这次用户请求继续写卡或改卡。', order: 80 }),
+    block({ type: 'inputSlot', role: 'user', title: '用户输入', order: 90 }),
+    block({ type: 'tail', role: 'system', title: '固定尾部', content: '最后再次检查：标题完整、作者备注不是图片来源、标签不超过十个、默认不要状态栏。', order: 100 })
   ];
 
   return {
@@ -112,14 +114,14 @@ export function makeDefaultPromptSet(createdAt = nowIso()) {
   };
 }
 
-export function defaultStore() {
+export function defaultStore(options = {}) {
   const createdAt = nowIso();
   const modelId = id('model');
   const prompt = makeDefaultPromptSet(createdAt);
   return {
     version: 3,
     settings: {
-      workspaceRoot: 'G:\\角色卡',
+      workspaceRoot: options.workspaceRoot || 'G:\\角色卡',
       currentWorkspace: '一一',
       tavilyKey: '',
       agentApprovalMode: 'confirm',
@@ -150,6 +152,22 @@ export function defaultStore() {
     prompts: [prompt],
     conversations: []
   };
+}
+
+export function ensurePromptSkillCatalog(prompt = {}) {
+  const normalized = normalizePrompt(prompt);
+  if (normalized.messages.some((message) => message.identifier === 'skillCatalog' || message.title === 'Skill 目录')) {
+    return normalized;
+  }
+  normalized.messages.push(block({
+    type: 'skill',
+    role: 'developer',
+    title: 'Skill 目录',
+    content: skillCatalogPrompt(),
+    order: 25,
+    identifier: 'skillCatalog'
+  }));
+  return normalizePrompt(normalized);
 }
 
 function migrateLegacyMessage(message = {}, index = 0) {
@@ -219,7 +237,7 @@ function messageFromBlock(blockItem, developerRoleMode) {
   };
 }
 
-export function buildMessages({ prompt, conversation, userText, section = '', developerRoleMode = 'compat' }) {
+export function buildMessages({ prompt, conversation, userText, section = '', developerRoleMode = 'compat', selectedSkills = [] }) {
   const normalized = normalizePrompt(prompt);
   const blocks = normalized.messages.filter((item) => item.enabled !== false);
   const history = (conversation?.messages || [])
@@ -230,6 +248,7 @@ export function buildMessages({ prompt, conversation, userText, section = '', de
     }));
 
   const sectionPrefix = section ? `【目标区块：${section}】\n` : '';
+  const skillPrefix = selectedSkillPrompt(selectedSkills);
   const output = [];
   let historyInserted = false;
   let inputInserted = false;
@@ -245,7 +264,7 @@ export function buildMessages({ prompt, conversation, userText, section = '', de
     if (inputInserted) return;
     output.push({
       role: 'user',
-      content: `${userPrefix}${userPrefix ? '\n\n' : ''}${sectionPrefix}${userText}`
+      content: [userPrefix, skillPrefix, `${sectionPrefix}${userText}`].filter(Boolean).join('\n\n')
     });
     inputInserted = true;
   };

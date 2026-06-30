@@ -390,7 +390,7 @@ a:hover {
   overflow: hidden;
   box-shadow: none;
   background: color-mix(in srgb, var(--surface-2) 42%, transparent);
-  opacity: 0.42;
+  opacity: 0.62;
   pointer-events: none;
 }
 
@@ -433,9 +433,9 @@ a:hover {
   height: 100%;
   object-fit: contain;
   display: block;
-  transform: scale(0.88);
-  filter: blur(12px) saturate(0.92);
-  opacity: 0.86;
+  transform: scale(0.94);
+  filter: blur(3px) saturate(1.04);
+  opacity: 0.94;
 }
 
 .hero-carousel::after {
@@ -443,8 +443,8 @@ a:hover {
   position: absolute;
   inset: 0;
   background:
-    linear-gradient(90deg, color-mix(in srgb, var(--bg) 54%, transparent), transparent 48%, color-mix(in srgb, var(--bg) 50%, transparent)),
-    linear-gradient(180deg, color-mix(in srgb, var(--surface) 56%, transparent), color-mix(in srgb, var(--bg) 64%, transparent));
+    linear-gradient(90deg, color-mix(in srgb, var(--bg) 36%, transparent), transparent 50%, color-mix(in srgb, var(--bg) 34%, transparent)),
+    linear-gradient(180deg, color-mix(in srgb, var(--surface) 34%, transparent), color-mix(in srgb, var(--bg) 46%, transparent));
   pointer-events: none;
   z-index: 2;
 }
@@ -522,6 +522,40 @@ a:hover {
   min-height: 0;
   overflow: auto;
   padding: 16px;
+}
+
+.skill-picker {
+  display: grid;
+  grid-template-columns: minmax(0, 220px) auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.skill-picker select {
+  min-width: 0;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 9px 10px;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.skill-chip-row {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.skill-chip {
+  flex: none;
+  min-height: 32px;
+  border-radius: 999px;
+  padding: 0 10px;
+  color: #fff;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  box-shadow: var(--soft-shadow);
 }
 
 .message {
@@ -1113,11 +1147,16 @@ a:hover {
     padding: 0 10px;
   }
 
-  .fullscreen-fab {
+  .fullscreen-actions {
     position: fixed;
     right: 10px;
     top: calc(10px + env(safe-area-inset-top));
     z-index: 30;
+    display: flex;
+    gap: 6px;
+  }
+
+  .fullscreen-fab {
     min-height: 36px;
     border-radius: 7px;
     padding: 0 12px;
@@ -1126,6 +1165,10 @@ a:hover {
     box-shadow: var(--shadow);
     display: inline-flex;
     align-items: center;
+  }
+
+  .fullscreen-fab.secondary {
+    background: var(--accent);
   }
 
   .panel-titlebar {
@@ -1137,9 +1180,8 @@ a:hover {
     font-size: 21px;
   }
 
-  .hero-carousel {
-    height: 150px;
-    margin: 10px 10px 0;
+  .chat-scroll > .hero-carousel {
+    inset: 10px;
   }
 
   .message-list {
@@ -1173,6 +1215,14 @@ a:hover {
     grid-template-columns: 1fr 1fr;
   }
 
+  .skill-picker {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .skill-chip-row {
+    grid-column: 1 / -1;
+  }
+
   .file-item {
     align-items: stretch;
     flex-direction: column;
@@ -1181,7 +1231,7 @@ a:hover {
 
 @media (max-width: 920px) and (orientation: portrait) {
   body::before {
-    content: "点击右上角进入横屏全屏";
+    content: "右上角可横屏或竖屏全屏";
     position: fixed;
     top: calc(52px + env(safe-area-inset-top));
     left: 50%;
@@ -1212,12 +1262,15 @@ a:hover {
 
   .fullscreen-fab {
     min-height: 32px;
-    top: 8px;
+  }
+
+  .chat-panel .panel-titlebar {
+    display: none;
   }
 
   .panel-titlebar {
-    min-height: 48px;
-    padding: 6px 100px 6px 10px;
+    min-height: 44px;
+    padding: 5px 160px 5px 8px;
   }
 
   .panel-titlebar h2 {
@@ -1231,16 +1284,31 @@ a:hover {
   .chat-head,
   .toolbar,
   .composer {
-    padding: 8px;
+    padding: 6px 8px;
+  }
+
+  .chat-head .title-input {
+    height: 34px;
+  }
+
+  .skill-picker {
+    grid-template-columns: minmax(0, 1fr) auto minmax(110px, 0.8fr);
+    gap: 6px;
+  }
+
+  .skill-picker select,
+  .skill-picker .ghost-button {
+    min-height: 34px;
+    padding: 0 9px;
   }
 
   .composer textarea {
-    min-height: 58px;
+    min-height: 44px;
+    max-height: 70px;
   }
 
-  .hero-carousel {
-    height: 112px;
-    margin: 8px 8px 0;
+  .chat-scroll > .hero-carousel {
+    inset: 8px;
   }
 
   .message {
