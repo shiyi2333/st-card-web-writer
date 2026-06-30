@@ -274,6 +274,7 @@ function fallbackPlanFromText(text = '', selectedSkills = []) {
 
 async function planSkillActions({ model, conversation, userText, section, selectedSkills, skills }) {
   const allowedActions = new Set(['web-search', 'image-search', 'export-card', 'workspace-write', 'card-section-rewrite']);
+  const allowedSkills = new Set((skills || []).map((skill) => skill.id));
   const selected = Array.isArray(selectedSkills) ? selectedSkills : [];
   try {
     const payload = await chatJson({
@@ -284,8 +285,9 @@ async function planSkillActions({ model, conversation, userText, section, select
           role: 'system',
           content: [
             '你是 skill planner。只输出 JSON，不要解释。',
-            'JSON 格式：{"actions":[{"action":"web-search|image-search|export-card|workspace-write|card-section-rewrite","input":{},"reason":"简短原因"}]}',
+            'JSON 格式：{"skills":["skill-id"],"actions":[{"action":"web-search|image-search|export-card|workspace-write|card-section-rewrite","input":{},"reason":"简短原因"}]}',
             '只有用户明确需要工具时才返回 action；普通聊天返回 {"actions":[]}.',
+            '如果用户需要某个纯提示词风格 skill，可以只返回 skills，不需要虚构 action。',
             '不要执行删除、移动等危险文件操作。',
             `可用 skills：${JSON.stringify(skills.map(({ id, name, description, actions }) => ({ id, name, description, actions })))}`
           ].join('\n')
@@ -302,19 +304,28 @@ async function planSkillActions({ model, conversation, userText, section, select
       ]
     });
     const planned = Array.isArray(payload.actions) ? payload.actions : [];
-    return planned
-      .filter((item) => allowedActions.has(item.action))
-      .slice(0, 3)
-      .map((item) => ({
-        action: item.action,
-        input: normalizeActionInput(item.action, item.input || {}, userText),
-        reason: item.reason || ''
-      }));
+    const plannedSkills = Array.isArray(payload.skills)
+      ? payload.skills.map(String).filter((skillId) => allowedSkills.has(skillId))
+      : [];
+    return {
+      skills: [...new Set([...selected, ...plannedSkills])],
+      actions: planned
+        .filter((item) => allowedActions.has(item.action))
+        .slice(0, 3)
+        .map((item) => ({
+          action: item.action,
+          input: normalizeActionInput(item.action, item.input || {}, userText),
+          reason: item.reason || ''
+        }))
+    };
   } catch {
-    return fallbackPlanFromText(userText, selected).map((item) => ({
-      ...item,
-      input: normalizeActionInput(item.action, item.input || {}, userText)
-    }));
+    return {
+      skills: selected,
+      actions: fallbackPlanFromText(userText, selected).map((item) => ({
+        ...item,
+        input: normalizeActionInput(item.action, item.input || {}, userText)
+      }))
+    };
   }
 }
 
@@ -609,7 +620,7 @@ app.post('/api/chat', async (req, res, next) => {
 
     let fullText = '';
     const toolResults = [];
-    const plannedActions = await planSkillActions({
+    const plan = await planSkillActions({
       model,
       conversation: { ...conversation, messages: previousMessages },
       userText: req.body.message,
@@ -617,8 +628,26 @@ app.post('/api/chat', async (req, res, next) => {
       selectedSkills: req.body.selectedSkills || [],
       skills
     });
+    const selectedSkillIds = [...new Set([...(req.body.selectedSkills || []).map(String), ...(plan.skills || [])])];
+    for (const skillId of selectedSkillIds) {
+      const skill = skills.find((item) => item.id === skillId);
+      if (!skill || skill.actions?.length) continue;
+      const toolId = `skill_${Date.now()}_${skillId}`;
+      const input = { skillId, name: skill.name };
+      const result = { skillId, name: skill.name, category: skill.category };
+      sse(res, 'skill_start', { toolId, action: 'skill-prompt', reason: '注入纯提示词 skill', input });
+      const toolMessage = await appendToolMessage(conversation, {
+        action: 'skill-prompt',
+        status: 'ok',
+        summary: `已注入 skill：${skill.name}`,
+        input,
+        result,
+        createdAt: nowIso()
+      });
+      sse(res, 'skill_result', { toolId, action: 'skill-prompt', result, toolMessage });
+    }
 
-    for (const [index, planned] of plannedActions.entries()) {
+    for (const [index, planned] of plan.actions.entries()) {
       const toolId = `tool_${Date.now()}_${index}`;
       const input = normalizeActionInput(planned.action, planned.input || {}, req.body.message);
       sse(res, 'skill_start', { toolId, action: planned.action, reason: planned.reason || '', input });
@@ -650,7 +679,7 @@ app.post('/api/chat', async (req, res, next) => {
       userText: req.body.message,
       section: req.body.section || '',
       developerRoleMode: store.data.settings.developerRoleMode || 'compat',
-      selectedSkills: req.body.selectedSkills || [],
+      selectedSkills: selectedSkillIds,
       skillCatalog: skills,
       toolResults
     });

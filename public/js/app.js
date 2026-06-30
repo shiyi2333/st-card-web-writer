@@ -10,6 +10,7 @@ const BLOCK_TYPES = [
   ['skill', 'skill指导块'],
   ['userPrefix', '用户输入前缀'],
   ['historySlot', '对话历史占位'],
+  ['historyInject', '历史深度插入'],
   ['inputSlot', '用户输入占位'],
   ['tail', '固定尾部'],
   ['normal', '普通块']
@@ -1050,12 +1051,15 @@ function addPromptMessage(message = {}) {
   row.className = `prompt-message type-${type}`;
   row.dataset.id = message.id || `new_${Date.now()}_${Math.random()}`;
   row.dataset.locked = locked ? 'true' : 'false';
+  row.dataset.identifier = message.identifier || '';
   row.innerHTML = `
     <div class="prompt-message-head">
       <span class="drag-handle">拖动</span>
       <select data-field="type">${blockTypeOptions(type)}</select>
       <select data-field="role">${roleOptions(message.role || 'system')}</select>
       <input data-field="title" placeholder="提示词名称" value="${escapeHtml(message.title || BLOCK_TYPES.find(([value]) => value === type)?.[1] || '新提示词')}">
+      <label class="inject-field">深度 <input data-field="injectionDepth" type="number" min="0" step="1" value="${message.injectionDepth ?? 0}"></label>
+      <label class="inject-field">位置 <input data-field="injectionPosition" placeholder="ST position" value="${escapeHtml(message.injectionPosition || '')}"></label>
       <label class="toggle"><input data-field="enabled" type="checkbox" ${message.enabled === false ? '' : 'checked'}>启用</label>
       <button type="button" class="mini-button danger" data-action="remove">删除</button>
     </div>
@@ -1086,6 +1090,9 @@ function collectPromptMessages() {
       content: locked ? '' : row.querySelector('[data-field="content"]').value,
       enabled: row.querySelector('[data-field="enabled"]').checked,
       locked,
+      identifier: row.dataset.identifier || '',
+      injectionDepth: type === 'historyInject' ? Number(row.querySelector('[data-field="injectionDepth"]')?.value || 0) : null,
+      injectionPosition: type === 'historyInject' ? row.querySelector('[data-field="injectionPosition"]')?.value.trim() || '' : '',
       order: (index + 1) * 10
     };
   });
@@ -1115,7 +1122,10 @@ async function importStPreset(event) {
   const result = await api('/api/prompts/import-st', { method: 'POST', body: JSON.stringify(json) });
   $('#importPreview').innerHTML = `
     <strong>已导入 ${escapeHtml(result.prompt.name)}</strong>
-    <p>${result.mapping.map((item) => `${item.identifier || item.title} → ${item.type}${item.enabled ? '' : '（禁用）'}`).join(' / ')}</p>
+    <p>${result.mapping.map((item) => {
+      const depth = item.type === 'historyInject' ? ` depth=${item.injectionDepth ?? 0}` : '';
+      return `${item.identifier || item.title} → ${item.type}${depth}${item.enabled ? '' : '（禁用）'}`;
+    }).join(' / ')}</p>
   `;
   await loadPrompts();
   fillPromptForm(result.prompt);

@@ -1,8 +1,8 @@
 ---
 id: openclaw-erotic-style
-name: OpenClaw 色色文风
+name: OpenClaw 肉感文风
 category: 文风
-description: 用于成人角色卡的作者备注、开场白和场景氛围增强。
+description: 用于成人角色卡的作者备注、开场白和场景氛围增强，是 agent 可选的风格 skill。
 actions: []
 ---
 只用于明确成年且自愿的角色。写作者备注和开场白时，保持轻网文自然叙事，让语言、动作、神态、心理连续推进；用细腻感官、暧昧试探、欲望与后悔感制造张力。

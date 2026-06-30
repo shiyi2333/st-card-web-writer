@@ -2,7 +2,7 @@ import { id, nowIso } from './store.js';
 import { DEFAULT_SKILLS, selectedSkillPrompt, skillCatalogPrompt } from './skills.js';
 
 export const ROLE_OPTIONS = ['system', 'developer', 'user', 'assistant'];
-export const PROMPT_BLOCK_TYPES = ['head', 'main', 'skill', 'userPrefix', 'historySlot', 'inputSlot', 'tail', 'normal'];
+export const PROMPT_BLOCK_TYPES = ['head', 'main', 'skill', 'userPrefix', 'historySlot', 'historyInject', 'inputSlot', 'tail', 'normal'];
 
 export const BLOCK_TYPE_LABELS = {
   head: '固定头部',
@@ -10,6 +10,7 @@ export const BLOCK_TYPE_LABELS = {
   skill: 'skill指导块',
   userPrefix: '用户输入前缀',
   historySlot: '对话历史占位',
+  historyInject: '历史深度插入',
   inputSlot: '用户输入占位',
   tail: '固定尾部',
   normal: '普通块'
@@ -37,6 +38,7 @@ export const GENERAL_ASSISTANT_PROMPT = `你是一个通用助手，可以自然
 function block(input = {}, index = 0) {
   const type = PROMPT_BLOCK_TYPES.includes(input.type) ? input.type : 'normal';
   const locked = input.locked === true || ['historySlot', 'inputSlot'].includes(type);
+  const hasInjectionDepth = input.injectionDepth !== undefined && input.injectionDepth !== null && input.injectionDepth !== '';
   return {
     id: input.id || id('pb'),
     type,
@@ -46,7 +48,9 @@ function block(input = {}, index = 0) {
     enabled: input.enabled !== false,
     locked,
     order: Number(input.order ?? (index + 1) * 10),
-    identifier: input.identifier || ''
+    identifier: input.identifier || '',
+    injectionDepth: hasInjectionDepth && Number.isFinite(Number(input.injectionDepth)) ? Math.max(0, Number(input.injectionDepth)) : null,
+    injectionPosition: input.injectionPosition || ''
   };
 }
 
@@ -191,6 +195,13 @@ export function buildMessages({
 }) {
   const normalized = normalizePrompt(prompt);
   const blocks = normalized.messages.filter((item) => item.enabled !== false && item.identifier !== 'skillCatalog' && item.title !== 'Skill 目录');
+  const historyInjectBlocks = blocks
+    .filter((item) => item.type === 'historyInject' && item.content.trim())
+    .sort((a, b) => {
+      const aDepth = Number.isFinite(Number(a.injectionDepth)) ? Number(a.injectionDepth) : 0;
+      const bDepth = Number.isFinite(Number(b.injectionDepth)) ? Number(b.injectionDepth) : 0;
+      return bDepth - aDepth || a.order - b.order;
+    });
   const history = (conversation?.messages || [])
     .filter((message) => ['user', 'assistant'].includes(message.role))
     .map((message) => ({
@@ -209,13 +220,23 @@ export function buildMessages({
   let inputInserted = false;
   let userPrefix = '';
 
+  const historyWithDepthInjections = () => {
+    const merged = [...history];
+    for (const item of historyInjectBlocks) {
+      const depth = Number.isFinite(Number(item.injectionDepth)) ? Math.max(0, Number(item.injectionDepth)) : 0;
+      const insertAt = Math.max(0, merged.length - depth);
+      merged.splice(insertAt, 0, messageFromBlock(item, developerRoleMode));
+    }
+    return merged;
+  };
+
   const insertHistory = () => {
     if (historyInserted) return;
     output.push({
       role: mapRole('developer', developerRoleMode),
       content: fixedToolPrompt
     });
-    output.push(...history);
+    output.push(...historyWithDepthInjections());
     historyInserted = true;
   };
 
@@ -231,6 +252,9 @@ export function buildMessages({
   for (const item of blocks) {
     if (item.type === 'historySlot') {
       insertHistory();
+      continue;
+    }
+    if (item.type === 'historyInject') {
       continue;
     }
     if (item.type === 'inputSlot') {
@@ -250,8 +274,31 @@ export function buildMessages({
   return output;
 }
 
-function blockTypeForIdentifier(identifier = '', marker = false) {
+function promptContent(source = {}) {
+  if (source?.content !== undefined) return String(source.content || '');
+  if (source?.system_prompt !== undefined) return String(source.system_prompt || '');
+  return '';
+}
+
+function promptMarker(source = {}) {
+  return source?.marker === true || (source?.content === undefined && source?.system_prompt === undefined);
+}
+
+function promptInjectionMeta(source = {}, orderItem = {}) {
+  const depth = source?.injection_depth ?? source?.injectionDepth ?? source?.depth ?? orderItem?.injection_depth ?? orderItem?.injectionDepth ?? orderItem?.depth;
+  const position = source?.injection_position ?? source?.injectionPosition ?? source?.position ?? orderItem?.injection_position ?? orderItem?.injectionPosition ?? orderItem?.position ?? '';
+  const hasDepth = depth !== undefined && depth !== null && depth !== '';
+  const hasPosition = position !== undefined && position !== null && String(position).trim() !== '';
+  return {
+    isInjected: hasDepth || hasPosition,
+    depth: hasDepth ? Math.max(0, Number(depth) || 0) : 0,
+    position: String(position || '')
+  };
+}
+
+function blockTypeForIdentifier(identifier = '', marker = false, injection = {}) {
   if (identifier === 'chatHistory') return 'historySlot';
+  if (!marker && injection.isInjected) return 'historyInject';
   if (identifier === 'main') return 'main';
   if (identifier === 'jailbreak' || identifier === 'nsfw') return 'tail';
   if (identifier === 'dialogueExamples' || identifier === 'charDescription' || identifier === 'charPersonality' || identifier === 'scenario' || identifier === 'worldInfoBefore' || identifier === 'worldInfoAfter') return 'skill';
@@ -275,24 +322,29 @@ export function importSillyTavernPreset(input = {}) {
   const mapping = [];
   for (const item of ordered) {
     const source = prompts.get(item.identifier);
-    const marker = source?.marker === true || source?.content === undefined;
-    const type = blockTypeForIdentifier(item.identifier, marker);
+    const marker = promptMarker(source);
+    const injection = promptInjectionMeta(source, item);
+    const type = blockTypeForIdentifier(item.identifier, marker, injection);
     const title = source?.name || item.identifier || 'ST Prompt';
     blocks.push(block({
       type,
       role: ROLE_OPTIONS.includes(source?.role) ? source.role : 'system',
       title,
-      content: marker ? '' : String(source?.content || ''),
+      content: marker ? '' : promptContent(source),
       enabled: item.enabled !== false,
       locked: type === 'historySlot',
-      identifier: item.identifier
+      identifier: item.identifier,
+      injectionDepth: type === 'historyInject' ? injection.depth : null,
+      injectionPosition: type === 'historyInject' ? injection.position : ''
     }, blocks.length));
     mapping.push({
       identifier: item.identifier,
       title,
       type,
       enabled: item.enabled !== false,
-      marker
+      marker,
+      injectionDepth: type === 'historyInject' ? injection.depth : null,
+      injectionPosition: type === 'historyInject' ? injection.position : ''
     });
   }
 
