@@ -356,9 +356,11 @@ a:hover {
 }
 
 .chat-scroll {
+  display: flex;
+  flex-direction: column;
   flex: 1;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--surface) 46%, transparent), transparent),
     var(--bg);
@@ -373,8 +375,35 @@ a:hover {
   background: var(--surface-2);
 }
 
+.hero-carousel.carousel-ready {
+  background:
+    linear-gradient(135deg, rgba(18, 24, 38, 0.78), rgba(18, 24, 38, 0.18)),
+    var(--surface-2);
+}
+
+.hero-carousel .swiper-wrapper {
+  display: flex;
+  height: 100%;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+}
+
+.hero-carousel .swiper-wrapper::-webkit-scrollbar {
+  display: none;
+}
+
+.hero-carousel.swiper-initialized .swiper-wrapper {
+  overflow: visible;
+}
+
 .hero-carousel .swiper-slide {
   position: relative;
+  flex: 0 0 100%;
+  width: 100%;
+  min-width: 100%;
+  height: 100%;
+  scroll-snap-align: start;
   background: var(--surface-2);
 }
 
@@ -392,6 +421,22 @@ a:hover {
   background: linear-gradient(90deg, rgba(0,0,0,0.48), transparent 58%);
   pointer-events: none;
   z-index: 2;
+}
+
+.hero-carousel::before {
+  content: "Danbooru Live";
+  position: absolute;
+  top: 12px;
+  left: 14px;
+  z-index: 3;
+  padding: 5px 9px;
+  border: 1px solid rgba(255,255,255,0.24);
+  border-radius: 999px;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  background: rgba(0,0,0,0.38);
+  backdrop-filter: blur(10px);
 }
 
 .carousel-caption {
@@ -465,6 +510,9 @@ a:hover {
 }
 
 .message-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
   padding: 16px;
 }
 

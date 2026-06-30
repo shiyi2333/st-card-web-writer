@@ -37,6 +37,7 @@ const state = {
     results: []
   },
   carousel: null,
+  carouselTimer: null,
   promptSortable: null
 };
 
@@ -171,35 +172,66 @@ async function loadCarousel() {
 }
 
 function renderCarousel(images, source, warning) {
+  const carousel = $('#heroCarousel');
   const wrapper = $('#carouselSlides');
   wrapper.innerHTML = '';
+  stopCarouselFallback();
   if (!images.length) {
     wrapper.innerHTML = '<div class="swiper-slide carousel-empty">轮播图暂时没有加载出来</div>';
+    carousel?.classList.add('carousel-ready');
     return;
   }
   images.slice(0, 10).forEach((image) => {
     const slide = document.createElement('div');
     slide.className = 'swiper-slide';
-    const imgUrl = image.sampleUrl || image.previewUrl || image.fileUrl;
+    const imgUrl = image.previewUrl || image.sampleUrl || image.fileUrl;
     slide.innerHTML = `
       <img src="/api/images/proxy?url=${encodeURIComponent(imgUrl)}" alt="Danbooru ${image.id}">
       <div class="carousel-caption">
-        <strong>#${escapeHtml(image.id)}</strong>
+        <strong>Danbooru #${escapeHtml(image.id)}</strong>
         <span>${escapeHtml((image.tags || []).slice(0, 6).join(' '))}</span>
       </div>
     `;
     wrapper.appendChild(slide);
   });
-  if (state.carousel) state.carousel.destroy(true, true);
-  if (window.Swiper) {
-    state.carousel = new window.Swiper('#heroCarousel', {
-      loop: images.length > 1,
-      autoplay: { delay: 3200, disableOnInteraction: false },
-      pagination: { el: '.swiper-pagination' },
-      effect: 'slide'
-    });
+  carousel?.classList.add('carousel-ready');
+  if (state.carousel) {
+    state.carousel.destroy(true, true);
+    state.carousel = null;
+  }
+  if (window.Swiper && images.length > 1) {
+    try {
+      state.carousel = new window.Swiper('#heroCarousel', {
+        loop: true,
+        autoplay: { delay: 3200, disableOnInteraction: false },
+        pagination: { el: '.swiper-pagination' },
+        effect: 'slide'
+      });
+    } catch (error) {
+      console.warn('Swiper carousel fallback enabled:', error);
+      startCarouselFallback(wrapper);
+    }
+  } else {
+    startCarouselFallback(wrapper);
   }
   if (source === 'cache' && warning) toast('轮播使用缓存图，实时 D 站加载失败');
+}
+
+function stopCarouselFallback() {
+  if (state.carouselTimer) {
+    clearInterval(state.carouselTimer);
+    state.carouselTimer = null;
+  }
+}
+
+function startCarouselFallback(wrapper) {
+  const slides = [...wrapper.children];
+  if (slides.length <= 1) return;
+  let index = 0;
+  state.carouselTimer = setInterval(() => {
+    index = (index + 1) % slides.length;
+    slides[index]?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'start' });
+  }, 3200);
 }
 
 async function loadConversations() {
@@ -296,8 +328,7 @@ function renderMessages() {
     }
     list.appendChild(item);
   });
-  const scroll = $('.chat-scroll');
-  if (scroll) scroll.scrollTop = scroll.scrollHeight;
+  list.scrollTop = list.scrollHeight;
 }
 
 async function editMessage(message) {
