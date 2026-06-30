@@ -1,4 +1,5 @@
 import { CARD_SECTIONS } from './prompts.js';
+import { defaultStyleWorldEntry } from './worldbook.js';
 
 export const SECTION_LABELS = {
   名称: '角色卡标题',
@@ -135,7 +136,7 @@ export function makeCardJson(markdown, options = {}) {
       },
       character_book: {
         name: worldName,
-        entries: []
+        entries: options.includeDefaultWorldBook === false ? [] : [defaultStyleWorldEntry(worldName)]
       }
     }
   };

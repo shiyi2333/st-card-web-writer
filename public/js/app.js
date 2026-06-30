@@ -340,6 +340,28 @@ function messageRoleName(role) {
   return { user: '用户', assistant: '助手', tool: '工具' }[role] || role;
 }
 
+function toolResultHtml(tool = {}) {
+  if (tool.action === 'web-search' && tool.result?.results?.length) {
+    return `
+      <div class="tool-links">
+        ${tool.result.results.map((item) => `
+          <a class="tool-link-card" href="${escapeHtml(item.url)}" target="_blank">
+            <strong>${escapeHtml(item.title || item.url)}</strong>
+            <span>${escapeHtml(item.content || '')}</span>
+            <em>${escapeHtml(item.url || '')}</em>
+          </a>
+        `).join('')}
+      </div>
+    `;
+  }
+  if (tool.action === 'image-search' && tool.result?.results?.length) {
+    return `<div class="tool-grid">${tool.result.results.slice(0, 5).map((image) => `
+      <img src="/api/images/proxy?url=${encodeURIComponent(image.previewUrl || image.sampleUrl || image.fileUrl)}" alt="Danbooru ${escapeHtml(image.id)}">
+    `).join('')}</div>`;
+  }
+  return `<pre>${escapeHtml(JSON.stringify(tool.result || tool.error || {}, null, 2))}</pre>`;
+}
+
 function renderMessages() {
   const list = $('#messageList');
   list.innerHTML = '';
@@ -352,9 +374,9 @@ function renderMessages() {
       const tool = message.tool || {};
       item.innerHTML = `
         <div class="role"><span>工具: ${escapeHtml(tool.action || 'action')}</span><span>${formatDate(message.createdAt)}</span></div>
-        <div class="tool-card ${tool.status === 'error' ? 'error' : ''}">
-          <strong>${escapeHtml(tool.summary || message.content)}</strong>
-          <pre>${escapeHtml(JSON.stringify(tool.result || tool.error || {}, null, 2))}</pre>
+        <div class="tool-card ${tool.status === 'error' ? 'error' : ''} ${tool.status === 'running' ? 'running' : ''}">
+          <strong>${tool.status === 'running' ? '<span class="spinner"></span>' : ''}${escapeHtml(tool.summary || message.content)}</strong>
+          ${toolResultHtml(tool)}
         </div>
       `;
     } else {
@@ -366,7 +388,7 @@ function renderMessages() {
           <span>${messageRoleName(message.role)}${message.section ? ` · ${escapeHtml(message.section)}` : ''}${skillNames ? ` · ${escapeHtml(skillNames)}` : ''}</span>
           <span>${formatDate(message.createdAt)}</span>
         </div>
-        <div class="message-markdown">${markdownHtml(message.content)}</div>
+        <div class="message-markdown">${message.pending ? '<span class="spinner"></span><span class="pending-text">等待回复...</span>' : ''}${message.error ? `<div class="inline-error">${escapeHtml(message.error)}</div>` : markdownHtml(message.content)}</div>
         <details class="source-details"><summary>源码</summary><pre>${escapeHtml(message.content)}</pre></details>
         <div class="message-actions">
           <button class="mini-button" data-action="edit">编辑</button>
@@ -438,56 +460,118 @@ function clearSection() {
 
 async function sendMessage(textOverride = '') {
   if (!state.currentConversation) await createConversation();
+  if (state.isSending) return;
   const input = $('#messageInput');
   const content = (textOverride || input.value).trim();
   if (!content) return;
+  state.isSending = true;
+  $('#sendBtn').disabled = true;
   state.lastUserText = content;
   input.value = '';
 
   const selectedSkills = [...state.selectedSkills];
   const tempUser = { id: `tmp_${Date.now()}`, role: 'user', content, section: state.selectedSection, skills: selectedSkills, createdAt: new Date().toISOString() };
-  const tempAssistant = { id: `stream_${Date.now()}`, role: 'assistant', content: '', section: state.selectedSection, createdAt: new Date().toISOString() };
+  const tempAssistant = { id: `stream_${Date.now()}`, role: 'assistant', content: '', section: state.selectedSection, pending: true, createdAt: new Date().toISOString() };
   state.currentConversation.messages.push(tempUser, tempAssistant);
   renderMessages();
 
-  const response = await fetch('/api/chat', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ conversationId: state.currentConversation.id, message: content, section: state.selectedSection, selectedSkills })
-  });
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(err.error || '发送失败');
-  }
+  try {
+    const response = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conversationId: state.currentConversation.id, message: content, section: state.selectedSection, selectedSkills })
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.error || '发送失败');
+    }
 
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const events = buffer.split('\n\n');
-    buffer = events.pop() || '';
-    for (const event of events) {
-      const line = event.split('\n').find((item) => item.startsWith('data: '));
-      if (!line) continue;
-      const data = line.slice(6);
-      if (data === '[DONE]') continue;
-      const payload = JSON.parse(data);
-      if (payload.error) throw new Error(payload.error);
-      if (payload.token) {
-        tempAssistant.content += payload.token;
-        renderMessages();
-      }
-      if (payload.done && payload.message) {
-        await selectConversation(state.currentConversation.id);
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const events = buffer.split('\n\n');
+      buffer = events.pop() || '';
+      for (const event of events) {
+        const line = event.split('\n').find((item) => item.startsWith('data: '));
+        if (!line) continue;
+        const data = line.slice(6);
+        if (data === '[DONE]') continue;
+        const payload = JSON.parse(data);
+        if (payload.error) throw new Error(payload.error);
+        handleStreamPayload(payload, tempAssistant);
       }
     }
+    state.selectedSkills = [];
+    renderSelectedSkills();
+    await loadConversations();
+  } catch (error) {
+    tempAssistant.pending = false;
+    tempAssistant.error = error.message;
+    renderMessages();
+    throw error;
+  } finally {
+    state.isSending = false;
+    $('#sendBtn').disabled = false;
   }
-  state.selectedSkills = [];
-  renderSelectedSkills();
-  await loadConversations();
+}
+
+function upsertToolMessage(payload, status, summary) {
+  const id = payload.toolId || payload.toolMessage?.id || `tool_${Date.now()}`;
+  let message = state.currentConversation.messages.find((item) => item.id === id);
+  if (!message) {
+    message = {
+      id,
+      role: 'tool',
+      content: summary,
+      createdAt: new Date().toISOString(),
+      tool: { action: payload.action, status, summary }
+    };
+    state.currentConversation.messages.push(message);
+  }
+  message.tool = {
+    ...(message.tool || {}),
+    ...(payload.toolMessage?.tool || {}),
+    action: payload.action || message.tool?.action,
+    status,
+    summary,
+    input: payload.input || message.tool?.input,
+    result: payload.result || message.tool?.result,
+    error: payload.error ? { message: payload.error } : message.tool?.error
+  };
+  message.content = summary;
+  renderMessages();
+}
+
+function handleStreamPayload(payload, tempAssistant) {
+  const event = payload.event || (payload.token ? 'token' : payload.done ? 'done' : '');
+  if (event === 'skill_progress') {
+    upsertToolMessage(payload, 'running', payload.message || '正在执行 skill...');
+    return;
+  }
+  if (event === 'skill_start') {
+    upsertToolMessage(payload, 'running', `开始执行: ${payload.action}`);
+    return;
+  }
+  if (event === 'skill_result') {
+    upsertToolMessage(payload, 'ok', payload.toolMessage?.tool?.summary || `已完成: ${payload.action}`);
+    return;
+  }
+  if (event === 'skill_error') {
+    upsertToolMessage(payload, 'error', payload.error || `执行失败: ${payload.action}`);
+    return;
+  }
+  if (payload.token) {
+    tempAssistant.pending = false;
+    tempAssistant.content += payload.token;
+    renderMessages();
+  }
+  if (payload.done && payload.message) {
+    selectConversation(state.currentConversation.id).catch((error) => toast(error.message, 'error'));
+  }
 }
 
 function regenerateLast() {
@@ -693,6 +777,7 @@ async function maybeRunAction(label, fn) {
 async function runAgentAction(action, payload, label) {
   if ((state.settings.agentApprovalMode || 'confirm') === 'confirm' && !confirm(`执行工具动作：${label}`)) return null;
   if (!state.currentConversation) await createConversation();
+  upsertToolMessage({ toolId: `manual_${Date.now()}`, action, input: payload }, 'running', `正在执行: ${label}`);
   const response = await api('/api/agent/actions', {
     method: 'POST',
     body: JSON.stringify({ conversationId: state.currentConversation.id, action, ...payload })

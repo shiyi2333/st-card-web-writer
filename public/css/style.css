@@ -607,6 +607,13 @@ a:hover {
   background: color-mix(in srgb, var(--warm-soft) 56%, var(--surface));
 }
 
+.tool-card {
+  border: 1px solid color-mix(in srgb, var(--warm) 28%, transparent);
+  border-radius: 7px;
+  padding: 10px;
+  background: color-mix(in srgb, var(--surface) 62%, transparent);
+}
+
 .message .role {
   display: flex;
   justify-content: space-between;
@@ -620,6 +627,30 @@ a:hover {
 .section-markdown,
 .search-card p {
   line-height: 1.62;
+}
+
+.spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid color-mix(in srgb, var(--accent) 22%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 999px;
+  display: inline-block;
+  vertical-align: -3px;
+  margin-right: 8px;
+  animation: spin 0.78s linear infinite;
+}
+
+.pending-text {
+  color: var(--muted);
+}
+
+.inline-error {
+  color: var(--danger);
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 .message-markdown :is(h1, h2, h3),
@@ -653,6 +684,52 @@ a:hover {
   border-radius: 7px;
   padding: 10px;
   overflow: auto;
+}
+
+.tool-card.running {
+  border-color: color-mix(in srgb, var(--accent) 36%, transparent);
+  background: color-mix(in srgb, var(--accent-soft) 46%, var(--surface));
+}
+
+.tool-card.error {
+  border-color: color-mix(in srgb, var(--danger) 42%, transparent);
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+}
+
+.tool-links {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.tool-link-card {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--paper);
+}
+
+.tool-link-card span,
+.tool-link-card em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.tool-grid {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  overflow-x: auto;
+}
+
+.tool-grid img {
+  width: 74px;
+  height: 74px;
+  border-radius: 7px;
+  object-fit: cover;
 }
 
 .source-details {

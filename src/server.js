@@ -5,7 +5,7 @@ import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { JsonStore, id, maskKey, nowIso } from './store.js';
 import { defaultStore, buildMessages, ensurePromptSkillCatalog, importSillyTavernPreset, makeDefaultPromptSet, normalizePrompt, normalizePromptForSave } from './prompts.js';
-import { chatStream, fetchModels } from './ai.js';
+import { chatJson, chatStream, fetchModels } from './ai.js';
 import { latestAssistantMarkdown, makeCardJson, previewFromMarkdown } from './card.js';
 import { writeCardPng } from './png.js';
 import {
@@ -23,7 +23,7 @@ import {
   writeWorkspaceArtifact
 } from './workspace.js';
 import { searchDanbooru, tavilySearch } from './search.js';
-import { SKILL_CATALOG } from './skills.js';
+import { readSkillCatalog } from './skills.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -98,7 +98,7 @@ function requireBody(req, names) {
 
 async function migrateStore() {
   await store.mutate((data) => {
-    data.version = 3;
+    data.version = 4;
     data.settings ||= {};
     if (!data.settings.workspaceRoot || (process.platform !== 'win32' && /^G:\\/i.test(data.settings.workspaceRoot))) {
       data.settings.workspaceRoot = defaultWorkspaceRoot();
@@ -114,11 +114,20 @@ async function migrateStore() {
     data.usedImages.global ||= [];
     data.usedImages.workspaces ||= {};
     data.imageCache ||= [];
-    data.prompts = (data.prompts || []).map((prompt) => ensurePromptSkillCatalog(normalizePrompt(prompt)));
-    if (!data.prompts.some((prompt) => prompt.kind === 'lobsterCardV3')) {
+    data.prompts = (data.prompts || []).map(normalizePrompt);
+    let generalPrompt = data.prompts.find((prompt) => prompt.kind === 'generalAssistantV1');
+    if (!generalPrompt) {
       const defaultPrompt = makeDefaultPromptSet();
       data.prompts.unshift(defaultPrompt);
-      data.activePromptId = defaultPrompt.id;
+      generalPrompt = defaultPrompt;
+    } else {
+      const index = data.prompts.findIndex((prompt) => prompt.id === generalPrompt.id);
+      data.prompts[index] = ensurePromptSkillCatalog(generalPrompt);
+      generalPrompt = data.prompts[index];
+    }
+    const activePrompt = data.prompts.find((prompt) => prompt.id === data.activePromptId);
+    if (!activePrompt || activePrompt.kind === 'lobsterCardV3') {
+      data.activePromptId = generalPrompt.id;
     }
     data.models ||= [];
     if (!data.models.length) {
@@ -180,6 +189,135 @@ async function appendToolMessage(conversation, tool) {
   return message;
 }
 
+function sse(res, event, payload = {}) {
+  res.write(`data: ${JSON.stringify({ event, ...payload })}\n\n`);
+}
+
+function toolSummary(action, result) {
+  if (action === 'web-search') return `网页搜索完成：${result.results?.length || 0} 条结果`;
+  if (action === 'image-search') return `Danbooru 搜图完成：${result.results?.length || 0} 张候选`;
+  if (action === 'export-card') return '角色卡导出数据已准备';
+  if (action === 'workspace-write') return `已写入文件：${result.path || ''}`;
+  if (action === 'card-section-rewrite') return '已进入单区块重写模式';
+  return `工具已完成: ${action}`;
+}
+
+function normalizeActionInput(action, input = {}, userText = '') {
+  if (action === 'web-search') return { query: input.query || userText, maxResults: input.maxResults || 5 };
+  if (action === 'image-search') return { tags: input.tags || userText, limit: input.limit || store.data.settings.imageResultCount || 10, page: input.page || 1 };
+  if (action === 'export-card') return { messageId: input.messageId || '', markdown: input.markdown || '', selectedImage: input.selectedImage || null };
+  if (action === 'workspace-write') return { fileName: input.fileName || '', content: input.content || '', temp: Boolean(input.temp) };
+  if (action === 'card-section-rewrite') return { section: input.section || '', instruction: input.instruction || userText };
+  return input;
+}
+
+async function executeAgentAction(action, input, conversation, emit = null) {
+  let result;
+  if (action === 'image-search') {
+    emit?.('skill_progress', { action, message: '连接 Danbooru 并搜索候选图片' });
+    result = await searchDanbooru({ tags: input.tags, limit: input.limit || 10, usedIds: workspaceUsedImageIds(), page: input.page || 1, offset: input.offset || 0 });
+    await store.mutate((data) => {
+      data.imageCache ||= [];
+      const ids = new Set(data.imageCache.map((item) => String(item.id)));
+      for (const image of result.results) {
+        if (!ids.has(String(image.id))) data.imageCache.unshift(image);
+      }
+      data.imageCache = data.imageCache.slice(0, 80);
+    });
+  } else if (action === 'web-search') {
+    emit?.('skill_progress', { action, message: `连接 Tavily：${input.query}` });
+    result = await tavilySearch({ apiKey: store.data.settings.tavilyKey, query: input.query, maxResults: input.maxResults || 5 });
+  } else if (action === 'export-card') {
+    emit?.('skill_progress', { action, message: '读取当前角色卡并生成 Tavern Card JSON' });
+    const markdown = input.markdown || latestAssistantMarkdown(conversation, input.messageId);
+    const cardJson = makeCardJson(markdown, { selectedImage: input.selectedImage || null });
+    result = { preview: previewFromMarkdown(markdown), cardJson };
+  } else if (action === 'workspace-write') {
+    requireBody({ body: input }, ['fileName', 'content']);
+    emit?.('skill_progress', { action, message: `写入工作区文件：${input.fileName}` });
+    const target = await writeWorkspaceArtifact(store.data.settings, input.fileName, input.content, { temp: Boolean(input.temp) });
+    result = { path: target };
+  } else if (action === 'card-section-rewrite') {
+    result = { section: input.section || '', instruction: input.instruction || '' };
+  } else {
+    const error = new Error('未知 agent 动作');
+    error.status = 400;
+    throw error;
+  }
+
+  const toolMessage = await appendToolMessage(conversation, {
+    action,
+    status: 'ok',
+    summary: toolSummary(action, result),
+    input,
+    result,
+    createdAt: nowIso()
+  });
+  return { result, toolMessage };
+}
+
+function fallbackPlanFromText(text = '', selectedSkills = []) {
+  const actions = [];
+  const lower = String(text).toLowerCase();
+  const selected = new Set(selectedSkills || []);
+  if (selected.has('web-search') || /搜索|查一下|联网|网页|资料|来源|news|latest/.test(text)) {
+    actions.push({ action: 'web-search', input: { query: text, maxResults: 5 }, reason: '用户需要网页资料' });
+  }
+  if (selected.has('image-search') || /搜图|找图|danbooru|配图|换图/.test(lower)) {
+    actions.push({ action: 'image-search', input: { tags: text, limit: store.data.settings.imageResultCount || 10 }, reason: '用户需要图片候选' });
+  }
+  if (selected.has('export-card') || /导出|png|json|落盘/.test(lower)) {
+    actions.push({ action: 'export-card', input: {}, reason: '用户需要导出角色卡' });
+  }
+  return actions.slice(0, 3);
+}
+
+async function planSkillActions({ model, conversation, userText, section, selectedSkills, skills }) {
+  const allowedActions = new Set(['web-search', 'image-search', 'export-card', 'workspace-write', 'card-section-rewrite']);
+  const selected = Array.isArray(selectedSkills) ? selectedSkills : [];
+  try {
+    const payload = await chatJson({
+      config: model,
+      temperature: 0.1,
+      messages: [
+        {
+          role: 'system',
+          content: [
+            '你是 skill planner。只输出 JSON，不要解释。',
+            'JSON 格式：{"actions":[{"action":"web-search|image-search|export-card|workspace-write|card-section-rewrite","input":{},"reason":"简短原因"}]}',
+            '只有用户明确需要工具时才返回 action；普通聊天返回 {"actions":[]}.',
+            '不要执行删除、移动等危险文件操作。',
+            `可用 skills：${JSON.stringify(skills.map(({ id, name, description, actions }) => ({ id, name, description, actions })))}`
+          ].join('\n')
+        },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            message: userText,
+            targetSection: section || '',
+            selectedSkills: selected,
+            recentMessages: (conversation.messages || []).slice(-6).map((message) => ({ role: message.role, content: message.content?.slice(0, 500) }))
+          })
+        }
+      ]
+    });
+    const planned = Array.isArray(payload.actions) ? payload.actions : [];
+    return planned
+      .filter((item) => allowedActions.has(item.action))
+      .slice(0, 3)
+      .map((item) => ({
+        action: item.action,
+        input: normalizeActionInput(item.action, item.input || {}, userText),
+        reason: item.reason || ''
+      }));
+  } catch {
+    return fallbackPlanFromText(userText, selected).map((item) => ({
+      ...item,
+      input: normalizeActionInput(item.action, item.input || {}, userText)
+    }));
+  }
+}
+
 app.get('/api/health', (req, res) => {
   res.json({
     ok: true,
@@ -199,7 +337,9 @@ app.get('/api/device-paths', (req, res) => {
 });
 
 app.get('/api/skills', (req, res) => {
-  res.json({ skills: SKILL_CATALOG });
+  readSkillCatalog({ refresh: req.query.refresh === '1' })
+    .then((skills) => res.json({ skills }))
+    .catch((error) => res.status(500).json({ error: error.message }));
 });
 
 app.get('/api/settings', (req, res) => {
@@ -446,6 +586,8 @@ app.post('/api/chat', async (req, res, next) => {
     const prompt = activePrompt();
     if (!model?.apiKey) return res.status(400).json({ error: '请先保存可用的 API Key' });
     if (!prompt) return res.status(400).json({ error: '请先启用提示词预设' });
+    const skills = await readSkillCatalog();
+    const previousMessages = [...conversation.messages];
 
     const userMessage = {
       id: id('msg'),
@@ -466,13 +608,51 @@ app.post('/api/chat', async (req, res, next) => {
     res.setHeader('Connection', 'keep-alive');
 
     let fullText = '';
+    const toolResults = [];
+    const plannedActions = await planSkillActions({
+      model,
+      conversation: { ...conversation, messages: previousMessages },
+      userText: req.body.message,
+      section: req.body.section || '',
+      selectedSkills: req.body.selectedSkills || [],
+      skills
+    });
+
+    for (const [index, planned] of plannedActions.entries()) {
+      const toolId = `tool_${Date.now()}_${index}`;
+      const input = normalizeActionInput(planned.action, planned.input || {}, req.body.message);
+      sse(res, 'skill_start', { toolId, action: planned.action, reason: planned.reason || '', input });
+      try {
+        const { result, toolMessage } = await executeAgentAction(planned.action, input, conversation, (event, payload) => {
+          sse(res, event, { toolId, ...payload });
+        });
+        const packed = { action: planned.action, input, result };
+        toolResults.push(packed);
+        sse(res, 'skill_result', { toolId, action: planned.action, result, toolMessage });
+      } catch (error) {
+        const toolMessage = await appendToolMessage(conversation, {
+          action: planned.action,
+          status: 'error',
+          summary: `工具失败: ${planned.action}`,
+          input,
+          error: { message: error.message },
+          createdAt: nowIso()
+        });
+        const packed = { action: planned.action, input, error: error.message };
+        toolResults.push(packed);
+        sse(res, 'skill_error', { toolId, action: planned.action, error: error.message, toolMessage });
+      }
+    }
+
     const messages = buildMessages({
       prompt,
-      conversation: { ...conversation, messages: conversation.messages.slice(0, -1) },
+      conversation: { ...conversation, messages: previousMessages },
       userText: req.body.message,
       section: req.body.section || '',
       developerRoleMode: store.data.settings.developerRoleMode || 'compat',
-      selectedSkills: req.body.selectedSkills || []
+      selectedSkills: req.body.selectedSkills || [],
+      skillCatalog: skills,
+      toolResults
     });
     await chatStream({
       config: model,
@@ -794,38 +974,8 @@ app.post('/api/agent/actions', async (req, res, next) => {
     requireBody(req, ['conversationId', 'action']);
     const conversation = findConversation(req.body.conversationId);
     if (!conversation) return res.status(404).json({ error: '对话不存在' });
-    let result;
-    if (req.body.action === 'image-search') {
-      result = await searchDanbooru({ tags: req.body.tags, limit: req.body.limit || 10, usedIds: workspaceUsedImageIds(), page: req.body.page || 1, offset: req.body.offset || 0 });
-      await store.mutate((data) => {
-        data.imageCache ||= [];
-        const ids = new Set(data.imageCache.map((item) => String(item.id)));
-        for (const image of result.results) {
-          if (!ids.has(String(image.id))) data.imageCache.unshift(image);
-        }
-        data.imageCache = data.imageCache.slice(0, 80);
-      });
-    } else if (req.body.action === 'web-search') {
-      result = await tavilySearch({ apiKey: store.data.settings.tavilyKey, query: req.body.query, maxResults: req.body.maxResults || 5 });
-    } else if (req.body.action === 'export-card') {
-      const markdown = req.body.markdown || latestAssistantMarkdown(conversation, req.body.messageId);
-      const cardJson = makeCardJson(markdown, { selectedImage: req.body.selectedImage || null });
-      result = { preview: previewFromMarkdown(markdown), cardJson };
-    } else if (req.body.action === 'workspace-write') {
-      requireBody(req, ['fileName', 'content']);
-      const target = await writeWorkspaceArtifact(store.data.settings, req.body.fileName, req.body.content, { temp: Boolean(req.body.temp) });
-      result = { path: target };
-    } else {
-      return res.status(400).json({ error: '未知 agent 动作' });
-    }
-    const toolMessage = await appendToolMessage(conversation, {
-      action: req.body.action,
-      status: 'ok',
-      summary: `工具已完成: ${req.body.action}`,
-      input: req.body,
-      result,
-      createdAt: nowIso()
-    });
+    const input = normalizeActionInput(req.body.action, req.body, '');
+    const { result, toolMessage } = await executeAgentAction(req.body.action, input, conversation);
     res.json({ ok: true, result, toolMessage });
   } catch (error) {
     next(error);

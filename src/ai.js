@@ -72,3 +72,31 @@ export async function chatStream({ config, messages, onToken }) {
 
   return fullText;
 }
+
+export async function chatJson({ config, messages, temperature = 0.1 }) {
+  const response = await fetch(apiUrl(config, '/chat/completions'), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${config.apiKey}`
+    },
+    body: JSON.stringify({
+      model: config.model,
+      messages,
+      temperature,
+      stream: false
+    })
+  });
+
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`模型请求失败: ${response.status} ${detail}`);
+  }
+
+  const payload = await response.json();
+  const content = payload.choices?.[0]?.message?.content || '';
+  const jsonText = content.match(/```json\s*([\s\S]*?)```/i)?.[1]
+    || content.match(/\{[\s\S]*\}/)?.[0]
+    || content;
+  return JSON.parse(jsonText);
+}
