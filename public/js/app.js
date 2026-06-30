@@ -1,4 +1,8 @@
+const CARD_SECTIONS = ['名称', '描述', '性格', '场景', '开场白', '作者备注', '标签', '绘图标签', '示例对话', '系统提示词', '备用开场白'];
+const ROLES = ['system', 'developer', 'user', 'assistant'];
+
 const state = {
+  settings: {},
   conversations: [],
   currentConversation: null,
   models: [],
@@ -6,24 +10,41 @@ const state = {
   prompts: [],
   activePromptId: null,
   preview: null,
-  avatarDataUrl: ''
+  selectedSection: '',
+  selectedImage: null,
+  avatarDataUrl: '',
+  workspaces: [],
+  files: [],
+  lastUserText: ''
 };
-
-const sections = ['名称', '描述', '性格', '场景', '开场白', '作者备注', '标签', '绘图标签', '示例对话', '系统提示词', '备用开场白'];
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 
-function toast(text) {
-  const node = document.createElement('div');
-  node.className = 'toast';
-  node.textContent = text;
-  document.body.appendChild(node);
-  setTimeout(() => node.remove(), 1800);
+function escapeHtml(value) {
+  return String(value || '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
 }
 
-async function api(path, options = {}) {
-  const response = await fetch(path, {
+function formatDate(value) {
+  if (!value) return '';
+  return new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+function toast(text, kind = '') {
+  const node = document.createElement('div');
+  node.className = `toast ${kind}`;
+  node.textContent = text;
+  document.body.appendChild(node);
+  setTimeout(() => node.remove(), 2200);
+}
+
+async function api(url, options = {}) {
+  const response = await fetch(url, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
@@ -42,17 +63,39 @@ function setTab(name) {
   $(`#${name}Panel`)?.classList.add('active');
 }
 
-function formatDate(value) {
-  return new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+async function loadHealth() {
+  const health = await api('/api/health');
+  state.settings = health.settings || {};
+  $('#healthLine').textContent = health.activeModel ? `${health.activeModel.name} / ${health.activePrompt || '无预设'}` : '未配置模型';
+  fillSettingsForm();
 }
 
-async function loadHealth() {
-  try {
-    const health = await api('/api/health');
-    $('#healthLine').textContent = health.activeModel ? `${health.activeModel.name} / ${health.activePrompt || '无提示词'}` : '未配置模型';
-  } catch {
-    $('#healthLine').textContent = '服务未就绪';
-  }
+async function loadSettings() {
+  state.settings = await api('/api/settings');
+  fillSettingsForm();
+}
+
+function fillSettingsForm() {
+  $('#workspaceRootInput').value = state.settings.workspaceRoot || 'G:\\角色卡';
+  $('#tavilyKeyInput').value = '';
+  $('#tavilyKeyInput').placeholder = state.settings.hasTavilyKey ? state.settings.tavilyKey : '保存 Tavily API Key';
+  $('#agentModeInput').value = state.settings.agentApprovalMode || 'confirm';
+  $('#imageCountInput').value = String(state.settings.imageResultCount || 10);
+  $('#imageLimit').value = String(state.settings.imageResultCount || 10);
+}
+
+async function saveSettings(event) {
+  event.preventDefault();
+  const body = {
+    workspaceRoot: $('#workspaceRootInput').value.trim(),
+    agentApprovalMode: $('#agentModeInput').value,
+    imageResultCount: Number($('#imageCountInput').value)
+  };
+  const key = $('#tavilyKeyInput').value.trim();
+  if (key) body.tavilyKey = key;
+  state.settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify(body) });
+  await loadWorkspaces();
+  toast('设置已保存');
 }
 
 async function loadConversations() {
@@ -70,17 +113,14 @@ function renderConversations() {
     const button = document.createElement('button');
     button.className = `conversation-item ${state.currentConversation?.id === conversation.id ? 'active' : ''}`;
     button.innerHTML = `<h3>${escapeHtml(conversation.title)}</h3><p>${conversation.messageCount} 条 / ${formatDate(conversation.updatedAt)}</p>`;
-    button.addEventListener('click', () => selectConversation(conversation.id));
+    button.addEventListener('click', () => selectConversation(conversation.id).catch((error) => toast(error.message, 'error')));
     list.appendChild(button);
   });
 }
 
 async function createConversation() {
   const title = $('#conversationTitle').value.trim() || '新角色卡';
-  const conversation = await api('/api/conversations', {
-    method: 'POST',
-    body: JSON.stringify({ title })
-  });
+  const conversation = await api('/api/conversations', { method: 'POST', body: JSON.stringify({ title }) });
   await loadConversations();
   await selectConversation(conversation.id);
 }
@@ -91,19 +131,20 @@ async function selectConversation(id) {
   renderConversations();
   renderMessages();
   renderMessageSelect();
-  await refreshPreview();
+  await refreshPreview().catch(() => {});
 }
 
 async function saveTitle() {
   if (!state.currentConversation) return;
   const title = $('#conversationTitle').value.trim();
   if (!title) return;
-  await api(`/api/conversations/${state.currentConversation.id}`, {
-    method: 'PUT',
-    body: JSON.stringify({ title })
-  });
+  await api(`/api/conversations/${state.currentConversation.id}`, { method: 'PUT', body: JSON.stringify({ title }) });
   await loadConversations();
-  toast('已保存标题');
+  toast('标题已保存');
+}
+
+function messageRoleName(role) {
+  return { user: '用户', assistant: '助手', tool: '工具' }[role] || role;
 }
 
 function renderMessages() {
@@ -114,23 +155,51 @@ function renderMessages() {
     const item = document.createElement('article');
     item.className = `message ${message.role}`;
     item.dataset.id = message.id;
-    item.innerHTML = `
-      <div class="role">
-        <span>${message.role === 'assistant' ? '助手' : '用户'}</span>
-        <span>${formatDate(message.createdAt)}</span>
-      </div>
-      <pre>${escapeHtml(message.content)}</pre>
-    `;
-    if (message.role === 'assistant') {
-      item.addEventListener('click', async () => {
+    if (message.role === 'tool') {
+      const tool = message.tool || {};
+      item.innerHTML = `
+        <div class="role"><span>工具: ${escapeHtml(tool.action || 'action')}</span><span>${formatDate(message.createdAt)}</span></div>
+        <div class="tool-card ${tool.status === 'error' ? 'error' : ''}">
+          <strong>${escapeHtml(tool.summary || message.content)}</strong>
+          <pre>${escapeHtml(JSON.stringify(tool.result || tool.error || {}, null, 2))}</pre>
+        </div>
+      `;
+    } else {
+      item.innerHTML = `
+        <div class="role">
+          <span>${messageRoleName(message.role)}${message.section ? ` · ${escapeHtml(message.section)}` : ''}</span>
+          <span>${formatDate(message.createdAt)}</span>
+        </div>
+        <pre>${escapeHtml(message.content)}</pre>
+        <div class="message-actions">
+          <button class="mini-button" data-action="edit">编辑</button>
+          ${message.role === 'assistant' ? '<button class="mini-button" data-action="preview">预览这条</button>' : ''}
+          ${message.role === 'user' ? '<button class="mini-button" data-action="retry">按这条重试</button>' : ''}
+        </div>
+      `;
+      item.querySelector('[data-action="edit"]').addEventListener('click', () => editMessage(message));
+      item.querySelector('[data-action="preview"]')?.addEventListener('click', async () => {
         $('#messageSelect').value = message.id;
         setTab('preview');
         await refreshPreview();
+      });
+      item.querySelector('[data-action="retry"]')?.addEventListener('click', () => {
+        $('#messageInput').value = message.content;
+        state.selectedSection = message.section || '';
+        renderSectionChip();
       });
     }
     list.appendChild(item);
   });
   list.scrollTop = list.scrollHeight;
+}
+
+async function editMessage(message) {
+  const next = prompt('编辑消息内容', message.content);
+  if (next === null) return;
+  await api(`/api/messages/${message.id}`, { method: 'PUT', body: JSON.stringify({ content: next }) });
+  await selectConversation(state.currentConversation.id);
+  toast('消息已更新');
 }
 
 function renderMessageSelect() {
@@ -147,28 +216,52 @@ function renderMessageSelect() {
   if (assistants.at(-1)) select.value = assistants.at(-1).id;
 }
 
-async function sendMessage() {
-  if (!state.currentConversation) {
-    await createConversation();
-  }
+function renderSectionChip() {
+  const row = $('#sectionChipRow');
+  row.innerHTML = '';
+  if (!state.selectedSection) return;
+  const chip = document.createElement('span');
+  chip.className = 'section-chip';
+  chip.textContent = `正在修改: ${state.selectedSection}`;
+  row.appendChild(chip);
+}
+
+function chooseSection(name) {
+  if (!confirm(`把「${name}」标记到当前输入框，接下来只修改这个部分？`)) return;
+  state.selectedSection = name;
+  renderSectionChip();
+  setTab('chat');
+  $('#messageInput').focus();
+}
+
+function clearSection() {
+  state.selectedSection = '';
+  renderSectionChip();
+}
+
+async function sendMessage(textOverride = '') {
+  if (!state.currentConversation) await createConversation();
   const input = $('#messageInput');
-  const content = input.value.trim();
+  const content = (textOverride || input.value).trim();
   if (!content) return;
+  state.lastUserText = content;
   input.value = '';
-  const tempUser = { id: `tmp_${Date.now()}`, role: 'user', content, createdAt: new Date().toISOString() };
-  const tempAssistant = { id: `stream_${Date.now()}`, role: 'assistant', content: '', createdAt: new Date().toISOString() };
+
+  const tempUser = { id: `tmp_${Date.now()}`, role: 'user', content, section: state.selectedSection, createdAt: new Date().toISOString() };
+  const tempAssistant = { id: `stream_${Date.now()}`, role: 'assistant', content: '', section: state.selectedSection, createdAt: new Date().toISOString() };
   state.currentConversation.messages.push(tempUser, tempAssistant);
   renderMessages();
 
   const response = await fetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ conversationId: state.currentConversation.id, message: content })
+    body: JSON.stringify({ conversationId: state.currentConversation.id, message: content, section: state.selectedSection })
   });
   if (!response.ok) {
     const err = await response.json().catch(() => ({}));
     throw new Error(err.error || '发送失败');
   }
+
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
@@ -197,6 +290,14 @@ async function sendMessage() {
   await loadConversations();
 }
 
+function regenerateLast() {
+  const last = [...(state.currentConversation?.messages || [])].reverse().find((message) => message.role === 'user');
+  const text = state.lastUserText || last?.content || '';
+  if (!text) return toast('没有可重试的用户消息');
+  $('#messageInput').value = text;
+  sendMessage().catch((error) => toast(error.message, 'error'));
+}
+
 async function refreshPreview() {
   if (!state.currentConversation) return;
   const messageId = $('#messageSelect').value || undefined;
@@ -217,54 +318,54 @@ function renderPreview() {
     json.textContent = '';
     return;
   }
-  const statItems = [
-    `标题: ${state.preview.stats.title || '未识别'}`,
-    `标签: ${state.preview.stats.tagCount}`,
-    `绘图: ${state.preview.stats.drawingTagCount}`,
-    `开场: ${state.preview.stats.openingChars}`,
-    `状态栏: ${state.preview.stats.hasStatusBar ? '有' : '无'}`
-  ];
-  statItems.forEach((item) => {
+
+  [
+    ['标题', state.preview.stats.title || '未识别'],
+    ['ST 标签', state.preview.stats.tagCount],
+    ['绘图标签', state.preview.stats.drawingTagCount],
+    ['开场字数', state.preview.stats.openingChars],
+    ['状态栏', state.preview.stats.hasStatusBar ? '有' : '无']
+  ].forEach(([label, value]) => {
     const pill = document.createElement('span');
     pill.className = 'stat-pill';
-    pill.textContent = item;
+    pill.innerHTML = `<b>${escapeHtml(label)}</b>${escapeHtml(value)}`;
     stats.appendChild(pill);
   });
 
-  sections.forEach((name) => {
-    if (!state.preview.sections[name]) return;
+  CARD_SECTIONS.forEach((name) => {
+    const value = state.preview.sections[name];
+    if (!value) return;
     const card = document.createElement('button');
     card.className = 'section-card';
-    card.innerHTML = `<h3>${name}</h3><pre>${escapeHtml(state.preview.sections[name])}</pre>`;
-    card.addEventListener('click', () => insertSectionMarker(name));
+    card.innerHTML = `
+      <span class="section-kicker">${escapeHtml(state.preview.labels?.[name] || name)}</span>
+      <h3>${escapeHtml(name)}</h3>
+      <pre>${escapeHtml(value)}</pre>
+    `;
+    card.addEventListener('click', () => chooseSection(name));
     grid.appendChild(card);
   });
   json.textContent = JSON.stringify(state.preview.json, null, 2);
 }
 
-function insertSectionMarker(name) {
-  const input = $('#messageInput');
-  const current = input.value.trim();
-  const marker = `[修改:${name}]\n请只重写这个部分，并保持完整角色卡结构。`;
-  input.value = current ? `${current}\n\n${marker}` : marker;
-  setTab('chat');
-  input.focus();
-}
-
 async function exportCard(withPng) {
   if (!state.currentConversation) return;
   if (withPng && !state.avatarDataUrl) {
-    toast('请先选择 PNG 底图');
+    toast('请先在搜图区选择一张图片，或选择本地 PNG');
+    setTab('images');
     return;
   }
-  const result = await api('/api/cards/export', {
+  const doExport = async () => api('/api/cards/export', {
     method: 'POST',
     body: JSON.stringify({
       conversationId: state.currentConversation.id,
       messageId: $('#messageSelect').value || undefined,
-      avatarDataUrl: withPng ? state.avatarDataUrl : ''
+      avatarDataUrl: withPng ? state.avatarDataUrl : '',
+      selectedImage: state.selectedImage
     })
   });
+  const result = await maybeRunAction('导出角色卡到当前工作区', doExport);
+  if (!result) return;
   const links = [
     `<a href="${result.json}" target="_blank">JSON</a>`,
     `<a href="${result.markdown}" target="_blank">Markdown</a>`,
@@ -273,7 +374,244 @@ async function exportCard(withPng) {
   $('#exportResult').innerHTML = links;
   state.preview = result.preview;
   renderPreview();
-  toast('已导出');
+  await loadFiles();
+  await selectConversation(state.currentConversation.id);
+  toast('已导出到当前工作区');
+}
+
+async function searchImages() {
+  const tags = $('#imageTags').value.trim() || state.preview?.json?.data?.extensions?.danbooru_tags?.join(' ') || '1girl solo t-shirt huge_breasts';
+  $('#imageTags').value = tags;
+  const result = await runAgentAction('image-search', { tags, limit: Number($('#imageLimit').value) }, `用 Danbooru 搜图: ${tags}`);
+  if (!result) return;
+  renderImageResults(result);
+}
+
+function renderImageResults(payload) {
+  const grid = $('#imageResults');
+  grid.innerHTML = '';
+  if (!payload.results.length) {
+    grid.innerHTML = '<div class="empty-state">没有找到可用图片，放宽 tag 或换成 t-shirt / huge_breasts / hair color 试试。</div>';
+    return;
+  }
+  payload.results.forEach((image) => {
+    const card = document.createElement('article');
+    card.className = 'image-card';
+    const proxy = `/api/images/proxy?url=${encodeURIComponent(image.previewUrl || image.sampleUrl || image.fileUrl)}`;
+    card.innerHTML = `
+      <img src="${proxy}" alt="Danbooru ${image.id}" loading="lazy">
+      <div class="image-meta">
+        <strong>#${image.id}</strong>
+        <span>rating:${escapeHtml(image.rating)} score:${escapeHtml(image.score)}</span>
+        <p>${escapeHtml(image.tags.slice(0, 12).join(' '))}</p>
+        <div class="button-row">
+          <button class="mini-button" data-action="select">选择</button>
+          <a class="mini-link" href="${escapeHtml(image.postUrl)}" target="_blank">原帖</a>
+        </div>
+      </div>
+    `;
+    card.querySelector('[data-action="select"]').addEventListener('click', () => selectImage(image));
+    grid.appendChild(card);
+  });
+}
+
+async function selectImage(image) {
+  state.selectedImage = image;
+  state.avatarDataUrl = await imageToPngDataUrl(image.sampleUrl || image.fileUrl || image.previewUrl);
+  await api('/api/images/use', { method: 'POST', body: JSON.stringify({ id: image.id }) });
+  $('#selectedImageLine').innerHTML = `已选择 Danbooru <a href="${image.postUrl}" target="_blank">#${image.id}</a>，导出 PNG 会使用这张图。`;
+  toast('图片已选择');
+}
+
+async function imageToPngDataUrl(url) {
+  const image = new Image();
+  image.crossOrigin = 'anonymous';
+  const proxied = `/api/images/proxy?url=${encodeURIComponent(url)}`;
+  await new Promise((resolve, reject) => {
+    image.onload = resolve;
+    image.onerror = () => reject(new Error('图片加载失败'));
+    image.src = proxied;
+  });
+  const canvas = document.createElement('canvas');
+  const size = 512;
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const scale = Math.max(size / image.width, size / image.height);
+  const width = image.width * scale;
+  const height = image.height * scale;
+  ctx.drawImage(image, (size - width) / 2, (size - height) / 2, width, height);
+  return canvas.toDataURL('image/png');
+}
+
+async function webSearch() {
+  const query = $('#webQuery').value.trim();
+  if (!query) return;
+  const result = await runAgentAction('web-search', { query, maxResults: 5 }, `Tavily 网页搜索: ${query}`);
+  if (!result) return;
+  renderWebResults(result);
+}
+
+function renderWebResults(payload) {
+  const list = $('#webSearchResults');
+  list.innerHTML = '';
+  if (payload.answer) {
+    const answer = document.createElement('article');
+    answer.className = 'search-answer';
+    answer.textContent = payload.answer;
+    list.appendChild(answer);
+  }
+  (payload.results || []).forEach((item) => {
+    const card = document.createElement('article');
+    card.className = 'search-card';
+    card.innerHTML = `
+      <a href="${escapeHtml(item.url)}" target="_blank">${escapeHtml(item.title)}</a>
+      <p>${escapeHtml(item.content)}</p>
+      <span>${escapeHtml(item.url)}</span>
+    `;
+    list.appendChild(card);
+  });
+}
+
+async function maybeRunAction(label, fn) {
+  if ((state.settings.agentApprovalMode || 'confirm') === 'confirm' && !confirm(`执行工具动作：${label}`)) return null;
+  try {
+    return await fn();
+  } catch (error) {
+    toast(error.message, 'error');
+    throw error;
+  }
+}
+
+async function runAgentAction(action, payload, label) {
+  if ((state.settings.agentApprovalMode || 'confirm') === 'confirm' && !confirm(`执行工具动作：${label}`)) return null;
+  if (!state.currentConversation) await createConversation();
+  const response = await api('/api/agent/actions', {
+    method: 'POST',
+    body: JSON.stringify({
+      conversationId: state.currentConversation.id,
+      action,
+      ...payload
+    })
+  });
+  await selectConversation(state.currentConversation.id);
+  return response.result;
+}
+
+async function loadWorkspaces() {
+  const payload = await api('/api/workspaces');
+  state.workspaces = payload.workspaces || [];
+  state.settings.currentWorkspace = payload.current || state.settings.currentWorkspace || '';
+  $('#workspaceRootLine').textContent = `根目录：${payload.root || ''}`;
+  renderWorkspaceSelect();
+  await loadFiles().catch(() => {});
+}
+
+function renderWorkspaceSelect() {
+  const select = $('#workspaceSelect');
+  select.innerHTML = '';
+  state.workspaces.forEach((name) => {
+    const option = document.createElement('option');
+    option.value = name;
+    option.textContent = name;
+    select.appendChild(option);
+  });
+  select.value = state.settings.currentWorkspace || state.workspaces[0] || '';
+}
+
+async function createOrSwitchWorkspace() {
+  const typed = $('#workspaceName').value.trim();
+  const selected = $('#workspaceSelect').value;
+  const name = typed || selected || '默认工作区';
+  await api('/api/workspaces', { method: 'POST', body: JSON.stringify({ name }) });
+  $('#workspaceName').value = '';
+  await loadWorkspaces();
+  toast(`已切换到 ${name}`);
+}
+
+async function renameWorkspace() {
+  const from = $('#workspaceSelect').value;
+  if (!from) return;
+  const to = prompt('工作区改名为', from);
+  if (!to || to === from) return;
+  await api('/api/workspaces/name', { method: 'PUT', body: JSON.stringify({ from, to }) });
+  await loadWorkspaces();
+  toast('工作区已改名');
+}
+
+async function deleteWorkspace() {
+  const name = $('#workspaceSelect').value;
+  if (!name) return;
+  if (!confirm(`确认删除工作区「${name}」？里面的文件也会删除。`)) return;
+  await api('/api/workspaces', { method: 'DELETE', body: JSON.stringify({ name }) });
+  await loadWorkspaces();
+  toast('工作区已删除');
+}
+
+async function switchWorkspace() {
+  const name = $('#workspaceSelect').value;
+  if (!name) return;
+  await api('/api/workspaces/current', { method: 'PUT', body: JSON.stringify({ name }) });
+  await loadWorkspaces();
+}
+
+async function loadFiles() {
+  const payload = await api('/api/workspaces/files');
+  state.files = payload.files || [];
+  renderFiles();
+}
+
+function renderFiles() {
+  const list = $('#fileList');
+  list.innerHTML = '';
+  if (!state.files.length) {
+    list.innerHTML = '<div class="empty-state">当前工作区还没有文件。</div>';
+    return;
+  }
+  state.files.forEach((file) => {
+    const item = document.createElement('article');
+    item.className = `file-item ${file.isTemp ? 'temp' : ''}`;
+    item.innerHTML = `
+      <div>
+        <strong>${escapeHtml(file.name)}</strong>
+        <p>${file.type} / ${Math.ceil(file.size / 1024)} KB / ${formatDate(file.updatedAt)}</p>
+      </div>
+      <div class="button-row">
+        ${file.download ? `<a class="mini-link" href="${file.download}" target="_blank">下载</a>` : ''}
+        ${file.name !== 'temp' ? '<button class="mini-button" data-action="move">移动</button><button class="mini-button" data-action="rename">改名</button><button class="mini-button danger" data-action="delete">删除</button>' : ''}
+      </div>
+    `;
+    item.querySelector('[data-action="move"]')?.addEventListener('click', () => moveFile(file.name));
+    item.querySelector('[data-action="rename"]')?.addEventListener('click', () => renameFile(file.name));
+    item.querySelector('[data-action="delete"]')?.addEventListener('click', () => deleteFile(file.name));
+    list.appendChild(item);
+  });
+}
+
+async function renameFile(name) {
+  const to = prompt('改名为', name);
+  if (!to || to === name) return;
+  await api('/api/workspaces/item', { method: 'PUT', body: JSON.stringify({ from: name, to }) });
+  await loadFiles();
+}
+
+async function deleteFile(name) {
+  if (!confirm(`确认删除 ${name}？这个操作不能撤销。`)) return;
+  await api('/api/workspaces/item', { method: 'DELETE', body: JSON.stringify({ name }) });
+  await loadFiles();
+}
+
+async function moveFile(name) {
+  const fromWorkspace = state.settings.currentWorkspace || $('#workspaceSelect').value;
+  const toWorkspace = prompt('移动到哪个工作区？', state.workspaces.find((item) => item !== fromWorkspace) || fromWorkspace);
+  if (!toWorkspace || toWorkspace === fromWorkspace) return;
+  if (!confirm(`把 ${name} 从「${fromWorkspace}」移动到「${toWorkspace}」？`)) return;
+  await api('/api/workspaces/move', {
+    method: 'POST',
+    body: JSON.stringify({ fromWorkspace, itemName: name, toWorkspace })
+  });
+  await loadFiles();
+  toast('文件已移动');
 }
 
 async function loadModels() {
@@ -317,8 +655,7 @@ async function saveModel(event) {
     temperature: Number($('#modelTemperature').value || 0.8)
   };
   const key = $('#modelApiKey').value;
-  if (key) body.apiKey = key;
-  if (!idValue) body.apiKey = key;
+  if (key || !idValue) body.apiKey = key;
   const saved = idValue
     ? await api(`/api/models/${idValue}`, { method: 'PUT', body: JSON.stringify(body) })
     : await api('/api/models', { method: 'POST', body: JSON.stringify(body) });
@@ -336,10 +673,7 @@ async function fetchRemoteModels() {
     model: $('#modelIdText').value.trim()
   };
   if (!body.apiKey && $('#modelId').value) body.id = $('#modelId').value;
-  const payload = await api('/api/models/fetch', {
-    method: 'POST',
-    body: JSON.stringify(body)
-  });
+  const payload = await api('/api/models/fetch', { method: 'POST', body: JSON.stringify(body) });
   const select = $('#remoteModelSelect');
   select.innerHTML = '<option value="">选择远端模型</option>';
   payload.models.forEach((model) => {
@@ -364,7 +698,7 @@ function renderPrompts() {
   state.prompts.forEach((prompt) => {
     const button = document.createElement('button');
     button.className = `stack-item ${prompt.id === state.activePromptId ? 'active' : ''}`;
-    button.innerHTML = `<h3>${escapeHtml(prompt.name)}</h3><p>${formatDate(prompt.updatedAt)}</p>`;
+    button.innerHTML = `<h3>${escapeHtml(prompt.name)}</h3><p>${prompt.messages?.length || 0} 条 / ${formatDate(prompt.updatedAt)}</p>`;
     button.addEventListener('click', () => fillPromptForm(prompt));
     list.appendChild(button);
   });
@@ -375,17 +709,69 @@ function renderPrompts() {
 function fillPromptForm(prompt = {}) {
   $('#promptId').value = prompt.id || '';
   $('#promptName').value = prompt.name || '';
-  $('#promptSystem').value = prompt.system || '';
-  $('#promptRewrite').value = prompt.rewrite || '';
+  renderPromptMessages(prompt.messages || []);
+}
+
+function renderPromptMessages(messages) {
+  const list = $('#promptMessageList');
+  list.innerHTML = '';
+  messages
+    .slice()
+    .sort((a, b) => a.order - b.order)
+    .forEach((message) => addPromptMessage(message));
+}
+
+function addPromptMessage(message = {}) {
+  const list = $('#promptMessageList');
+  const row = document.createElement('article');
+  row.className = 'prompt-message';
+  row.draggable = true;
+  row.dataset.id = message.id || `new_${Date.now()}_${Math.random()}`;
+  row.innerHTML = `
+    <div class="prompt-message-head">
+      <span class="drag-handle">拖动</span>
+      <select data-field="role">${ROLES.map((role) => `<option value="${role}">${role}</option>`).join('')}</select>
+      <input data-field="title" placeholder="提示词名称" value="${escapeHtml(message.title || '新提示词')}">
+      <label class="toggle"><input data-field="enabled" type="checkbox" ${message.enabled === false ? '' : 'checked'}>启用</label>
+      <button type="button" class="mini-button danger" data-action="remove">删除</button>
+    </div>
+    <textarea data-field="content" rows="7">${escapeHtml(message.content || '')}</textarea>
+  `;
+  row.querySelector('[data-field="role"]').value = message.role || 'system';
+  row.querySelector('[data-action="remove"]').addEventListener('click', () => row.remove());
+  row.addEventListener('dragstart', (event) => {
+    event.dataTransfer.setData('text/plain', row.dataset.id);
+    row.classList.add('dragging');
+  });
+  row.addEventListener('dragend', () => row.classList.remove('dragging'));
+  row.addEventListener('dragover', (event) => {
+    event.preventDefault();
+    const dragging = $('.prompt-message.dragging');
+    if (!dragging || dragging === row) return;
+    const rect = row.getBoundingClientRect();
+    const before = event.clientY < rect.top + rect.height / 2;
+    list.insertBefore(dragging, before ? row : row.nextSibling);
+  });
+  list.appendChild(row);
+}
+
+function collectPromptMessages() {
+  return $$('#promptMessageList .prompt-message').map((row, index) => ({
+    id: row.dataset.id.startsWith('new_') ? undefined : row.dataset.id,
+    role: row.querySelector('[data-field="role"]').value,
+    title: row.querySelector('[data-field="title"]').value.trim() || `提示词 ${index + 1}`,
+    content: row.querySelector('[data-field="content"]').value,
+    enabled: row.querySelector('[data-field="enabled"]').checked,
+    order: (index + 1) * 10
+  }));
 }
 
 async function savePrompt(event) {
   event.preventDefault();
   const idValue = $('#promptId').value;
   const body = {
-    name: $('#promptName').value.trim(),
-    system: $('#promptSystem').value,
-    rewrite: $('#promptRewrite').value
+    name: $('#promptName').value.trim() || '未命名预设',
+    messages: collectPromptMessages()
   };
   const saved = idValue
     ? await api(`/api/prompts/${idValue}`, { method: 'PUT', body: JSON.stringify(body) })
@@ -394,64 +780,47 @@ async function savePrompt(event) {
   await api(`/api/prompts/${activeId}/activate`, { method: 'POST' });
   await loadPrompts();
   await loadHealth();
-  toast('提示词已保存');
-}
-
-function escapeHtml(value) {
-  return String(value || '')
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#039;');
+  toast('预设已保存');
 }
 
 function wireEvents() {
   $$('.tab-button').forEach((button) => button.addEventListener('click', () => setTab(button.dataset.tab)));
-  $('#newConversationBtn').addEventListener('click', createConversation);
-  $('#saveTitleBtn').addEventListener('click', saveTitle);
-  $('#sendBtn').addEventListener('click', () => sendMessage().catch((error) => toast(error.message)));
+  $('#newConversationBtn').addEventListener('click', () => createConversation().catch((error) => toast(error.message, 'error')));
+  $('#saveTitleBtn').addEventListener('click', () => saveTitle().catch((error) => toast(error.message, 'error')));
+  $('#sendBtn').addEventListener('click', () => sendMessage().catch((error) => toast(error.message, 'error')));
+  $('#regenerateBtn').addEventListener('click', regenerateLast);
+  $('#clearSectionBtn').addEventListener('click', clearSection);
   $('#messageInput').addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
-      sendMessage().catch((error) => toast(error.message));
-    }
+    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) sendMessage().catch((error) => toast(error.message, 'error'));
   });
-  $('#previewBtn').addEventListener('click', () => refreshPreview().then(() => setTab('preview')).catch((error) => toast(error.message)));
-  $('#refreshPreviewBtn').addEventListener('click', () => refreshPreview().catch((error) => toast(error.message)));
-  $('#exportJsonBtn').addEventListener('click', () => exportCard(false).catch((error) => toast(error.message)));
-  $('#exportPngBtn').addEventListener('click', () => exportCard(true).catch((error) => toast(error.message)));
-  $('#avatarInput').addEventListener('change', async (event) => {
-    const file = event.target.files[0];
-    if (!file) return;
-    if (file.type !== 'image/png') {
-      toast('只支持 PNG');
-      return;
-    }
-    state.avatarDataUrl = await fileToDataUrl(file);
-    toast('底图已载入');
-  });
+  $('#previewBtn').addEventListener('click', () => refreshPreview().then(() => setTab('preview')).catch((error) => toast(error.message, 'error')));
+  $('#refreshPreviewBtn').addEventListener('click', () => refreshPreview().catch((error) => toast(error.message, 'error')));
+  $('#exportJsonBtn').addEventListener('click', () => exportCard(false).catch((error) => toast(error.message, 'error')));
+  $('#exportPngBtn').addEventListener('click', () => exportCard(true).catch((error) => toast(error.message, 'error')));
+  $('#searchImagesBtn').addEventListener('click', () => searchImages().catch((error) => toast(error.message, 'error')));
+  $('#webSearchBtn').addEventListener('click', () => webSearch().catch((error) => toast(error.message, 'error')));
+  $('#createWorkspaceBtn').addEventListener('click', () => createOrSwitchWorkspace().catch((error) => toast(error.message, 'error')));
+  $('#renameWorkspaceBtn').addEventListener('click', () => renameWorkspace().catch((error) => toast(error.message, 'error')));
+  $('#deleteWorkspaceBtn').addEventListener('click', () => deleteWorkspace().catch((error) => toast(error.message, 'error')));
+  $('#workspaceSelect').addEventListener('change', () => switchWorkspace().catch((error) => toast(error.message, 'error')));
+  $('#refreshFilesBtn').addEventListener('click', () => loadFiles().catch((error) => toast(error.message, 'error')));
   $('#newModelBtn').addEventListener('click', () => fillModelForm({}));
-  $('#modelForm').addEventListener('submit', (event) => saveModel(event).catch((error) => toast(error.message)));
-  $('#fetchModelsBtn').addEventListener('click', () => fetchRemoteModels().catch((error) => toast(error.message)));
+  $('#modelForm').addEventListener('submit', (event) => saveModel(event).catch((error) => toast(error.message, 'error')));
+  $('#fetchModelsBtn').addEventListener('click', () => fetchRemoteModels().catch((error) => toast(error.message, 'error')));
   $('#remoteModelSelect').addEventListener('change', (event) => {
     if (event.target.value) $('#modelIdText').value = event.target.value;
   });
-  $('#newPromptBtn').addEventListener('click', () => fillPromptForm({}));
-  $('#promptForm').addEventListener('submit', (event) => savePrompt(event).catch((error) => toast(error.message)));
-}
-
-function fileToDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
-  });
+  $('#newPromptBtn').addEventListener('click', () => fillPromptForm({ name: '新预设', messages: [] }));
+  $('#addPromptMessageBtn').addEventListener('click', () => addPromptMessage({ role: 'system', title: '新提示词', content: '', enabled: true }));
+  $('#promptForm').addEventListener('submit', (event) => savePrompt(event).catch((error) => toast(error.message, 'error')));
+  $('#settingsForm').addEventListener('submit', (event) => saveSettings(event).catch((error) => toast(error.message, 'error')));
 }
 
 async function init() {
   wireEvents();
-  await Promise.all([loadHealth(), loadModels(), loadPrompts(), loadConversations()]);
+  await Promise.all([loadHealth(), loadSettings(), loadModels(), loadPrompts()]);
+  await loadWorkspaces().catch((error) => toast(error.message, 'error'));
+  await loadConversations();
 }
 
-init().catch((error) => toast(error.message));
+init().catch((error) => toast(error.message, 'error'));
