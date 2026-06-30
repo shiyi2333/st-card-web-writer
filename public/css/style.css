@@ -356,29 +356,48 @@ a:hover {
 }
 
 .chat-scroll {
+  position: relative;
   display: flex;
   flex-direction: column;
   flex: 1;
   min-height: 0;
   overflow: hidden;
+  isolation: isolate;
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--surface) 46%, transparent), transparent),
     var(--bg);
 }
 
-.hero-carousel {
-  height: 190px;
-  margin: 16px 16px 0;
-  border-radius: 8px;
-  overflow: hidden;
-  box-shadow: var(--soft-shadow);
-  background: var(--surface-2);
+.chat-scroll::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg) 62%, transparent), color-mix(in srgb, var(--surface) 72%, transparent)),
+    radial-gradient(circle at 18% 10%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 34%);
 }
 
-.hero-carousel.carousel-ready {
+.chat-scroll > .hero-carousel {
+  position: absolute;
+  inset: 14px;
+  z-index: 0;
+  height: auto;
+  margin: 0;
+  border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: none;
+  background: color-mix(in srgb, var(--surface-2) 42%, transparent);
+  opacity: 0.42;
+  pointer-events: none;
+}
+
+.chat-scroll > .hero-carousel.carousel-ready {
   background:
-    linear-gradient(135deg, rgba(18, 24, 38, 0.78), rgba(18, 24, 38, 0.18)),
-    var(--surface-2);
+    linear-gradient(135deg, rgba(18, 24, 38, 0.32), rgba(18, 24, 38, 0.06)),
+    color-mix(in srgb, var(--surface-2) 34%, transparent);
 }
 
 .hero-carousel .swiper-wrapper {
@@ -399,56 +418,43 @@ a:hover {
 
 .hero-carousel .swiper-slide {
   position: relative;
+  display: grid;
+  place-items: center;
   flex: 0 0 100%;
   width: 100%;
   min-width: 100%;
   height: 100%;
   scroll-snap-align: start;
-  background: var(--surface-2);
+  background: transparent;
 }
 
 .hero-carousel img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
   display: block;
+  transform: scale(0.88);
+  filter: blur(12px) saturate(0.92);
+  opacity: 0.86;
 }
 
 .hero-carousel::after {
   content: "";
   position: absolute;
   inset: 0;
-  background: linear-gradient(90deg, rgba(0,0,0,0.48), transparent 58%);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--bg) 54%, transparent), transparent 48%, color-mix(in srgb, var(--bg) 50%, transparent)),
+    linear-gradient(180deg, color-mix(in srgb, var(--surface) 56%, transparent), color-mix(in srgb, var(--bg) 64%, transparent));
   pointer-events: none;
   z-index: 2;
 }
 
 .hero-carousel::before {
-  content: "Danbooru Live";
-  position: absolute;
-  top: 12px;
-  left: 14px;
-  z-index: 3;
-  padding: 5px 9px;
-  border: 1px solid rgba(255,255,255,0.24);
-  border-radius: 999px;
-  color: #fff;
-  font-size: 11px;
-  font-weight: 700;
-  background: rgba(0,0,0,0.38);
-  backdrop-filter: blur(10px);
+  content: none;
 }
 
 .carousel-caption {
-  position: absolute;
-  left: 16px;
-  bottom: 14px;
-  z-index: 3;
-  color: #fff;
-  display: grid;
-  gap: 4px;
-  max-width: min(520px, 75%);
-  text-shadow: 0 2px 12px rgba(0,0,0,0.6);
+  display: none;
 }
 
 .carousel-caption strong {
@@ -510,6 +516,8 @@ a:hover {
 }
 
 .message-list {
+  position: relative;
+  z-index: 2;
   flex: 1;
   min-height: 0;
   overflow: auto;
