@@ -2,13 +2,14 @@ import { id, nowIso } from './store.js';
 import { DEFAULT_SKILLS, selectedSkillPrompt, skillCatalogPrompt } from './skills.js';
 
 export const ROLE_OPTIONS = ['system', 'developer', 'user', 'assistant'];
-export const PROMPT_BLOCK_TYPES = ['head', 'main', 'skill', 'userPrefix', 'historySlot', 'historyInject', 'inputSlot', 'tail', 'normal'];
+export const PROMPT_BLOCK_TYPES = ['head', 'main', 'skill', 'userPrefix', 'skillSlot', 'historySlot', 'historyInject', 'inputSlot', 'tail', 'normal'];
 
 export const BLOCK_TYPE_LABELS = {
   head: '固定头部',
   main: '主提示词',
   skill: 'skill指导块',
   userPrefix: '用户输入前缀',
+  skillSlot: '固定 Skill 文档',
   historySlot: '对话历史占位',
   historyInject: '历史深度插入',
   inputSlot: '用户输入占位',
@@ -37,7 +38,7 @@ export const GENERAL_ASSISTANT_PROMPT = `你是一个通用助手，可以自然
 
 function block(input = {}, index = 0) {
   const type = PROMPT_BLOCK_TYPES.includes(input.type) ? input.type : 'normal';
-  const locked = input.locked === true || ['historySlot', 'inputSlot'].includes(type);
+  const locked = input.locked === true || ['historySlot', 'inputSlot', 'skillSlot'].includes(type);
   const hasInjectionDepth = input.injectionDepth !== undefined && input.injectionDepth !== null && input.injectionDepth !== '';
   return {
     id: input.id || id('pb'),
@@ -57,8 +58,9 @@ function block(input = {}, index = 0) {
 export function makeDefaultPromptSet(createdAt = nowIso(), skills = DEFAULT_SKILLS) {
   const blocks = [
     block({ type: 'head', role: 'system', title: '通用助手规则', content: GENERAL_ASSISTANT_PROMPT, order: 10 }),
-    block({ type: 'historySlot', role: 'system', title: '对话历史', order: 20 }),
-    block({ type: 'inputSlot', role: 'user', title: '用户输入', order: 30 })
+    block({ type: 'skillSlot', role: 'developer', title: '固定 Skill 文档', order: 20 }),
+    block({ type: 'historySlot', role: 'system', title: '对话历史', order: 30 }),
+    block({ type: 'inputSlot', role: 'user', title: '用户输入', order: 40 })
   ];
 
   return {
@@ -135,6 +137,10 @@ export function normalizePrompt(prompt = {}) {
 
   if (!messages.some((item) => item.type === 'historySlot')) {
     messages.push(block({ type: 'historySlot', title: '对话历史', order: 900 }));
+  }
+  if (!messages.some((item) => item.type === 'skillSlot')) {
+    const historyOrder = messages.find((item) => item.type === 'historySlot')?.order ?? 900;
+    messages.push(block({ type: 'skillSlot', role: 'developer', title: '固定 Skill 文档', order: historyOrder - 1 }));
   }
   if (!messages.some((item) => item.type === 'inputSlot')) {
     messages.push(block({ type: 'inputSlot', title: '用户输入', order: 910 }));
@@ -218,6 +224,7 @@ export function buildMessages({
   const output = [];
   let historyInserted = false;
   let inputInserted = false;
+  let skillDocsInserted = false;
   let userPrefix = '';
 
   const historyWithDepthInjections = () => {
@@ -230,12 +237,17 @@ export function buildMessages({
     return merged;
   };
 
-  const insertHistory = () => {
-    if (historyInserted) return;
+  const insertSkillDocs = () => {
+    if (skillDocsInserted) return;
     output.push({
       role: mapRole('developer', developerRoleMode),
       content: fixedToolPrompt
     });
+    skillDocsInserted = true;
+  };
+
+  const insertHistory = () => {
+    if (historyInserted) return;
     output.push(...historyWithDepthInjections());
     historyInserted = true;
   };
@@ -250,6 +262,10 @@ export function buildMessages({
   };
 
   for (const item of blocks) {
+    if (item.type === 'skillSlot') {
+      insertSkillDocs();
+      continue;
+    }
     if (item.type === 'historySlot') {
       insertHistory();
       continue;
@@ -269,6 +285,7 @@ export function buildMessages({
     if (item.content.trim()) output.push(messageFromBlock(item, developerRoleMode));
   }
 
+  if (!skillDocsInserted) insertSkillDocs();
   if (!historyInserted) insertHistory();
   if (!inputInserted) insertInput();
   return output;

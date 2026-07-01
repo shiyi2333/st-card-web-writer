@@ -1182,6 +1182,7 @@ a:hover {
 .prompt-message.type-head::before { background: var(--accent); }
 .prompt-message.type-main::before { background: var(--warm); }
 .prompt-message.type-skill::before { background: var(--accent-2); }
+.prompt-message.type-skillSlot::before { background: #2f9e8f; }
 .prompt-message.type-tail::before { background: #8b6fd6; }
 .prompt-message.type-historyInject::before { background: #e06c47; }
 .prompt-message.type-historySlot::before,

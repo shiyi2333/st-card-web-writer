@@ -129,10 +129,18 @@ export async function readSkillCatalog({ refresh = false } = {}) {
 
 export function skillCatalogPrompt(skills = DEFAULT_SKILLS) {
   return [
-    '固定工具说明：根据用户意图判断是否需要使用下列 skills；只有真正有帮助时才使用，不要为了使用而使用。',
+    '固定 Skill 文档：以下内容由项目 skills/*.md 自动组合而成，用于说明 agent 可调用的能力、写作规范和工具边界。',
+    '根据用户意图判断是否需要使用某个 skill；只有真正有帮助时才使用，不要为了使用而使用。',
     '如果用户从界面显式选择了某个 skill，本轮优先遵循该 skill。普通聊天不要擅自进入角色卡制作格式。',
     '',
-    ...skills.map((skill) => `- ${skill.name} (${skill.id}): ${skill.description}`)
+    ...skills.map((skill) => [
+      `## ${skill.name} (${skill.id})`,
+      `category: ${skill.category}`,
+      `actions: ${(skill.actions || []).join(', ') || 'none'}`,
+      `description: ${skill.description}`,
+      '',
+      skill.prompt
+    ].join('\n'))
   ].join('\n');
 }
 

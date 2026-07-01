@@ -9,13 +9,14 @@ const BLOCK_TYPES = [
   ['main', '主提示词'],
   ['skill', 'skill指导块'],
   ['userPrefix', '用户输入前缀'],
+  ['skillSlot', '固定 Skill 文档'],
   ['historySlot', '对话历史占位'],
   ['historyInject', '历史深度插入'],
   ['inputSlot', '用户输入占位'],
   ['tail', '固定尾部'],
   ['normal', '普通块']
 ];
-const LOCKED_TYPES = new Set(['historySlot', 'inputSlot']);
+const LOCKED_TYPES = new Set(['skillSlot', 'historySlot', 'inputSlot']);
 
 const state = {
   settings: {},
@@ -41,7 +42,8 @@ const state = {
   },
   carousel: null,
   carouselTimer: null,
-  promptSortable: null
+  promptSortable: null,
+  messageRenderFrame: null
 };
 
 marked.setOptions({
@@ -336,7 +338,7 @@ async function selectConversation(id) {
   state.currentConversation = await api(`/api/conversations/${id}`);
   $('#conversationTitle').value = state.currentConversation.title;
   renderConversations();
-  renderMessages();
+  renderMessages({ forceScroll: true });
   renderMessageSelect();
   await refreshPreview().catch(() => {});
 }
@@ -392,8 +394,14 @@ function toolResultHtml(tool = {}) {
   return `${meta}<pre>${escapeHtml(JSON.stringify(tool.result || tool.error || {}, null, 2))}</pre>`;
 }
 
-function renderMessages() {
+function isNearMessageBottom(list) {
+  if (!list) return true;
+  return list.scrollHeight - list.scrollTop - list.clientHeight < 96;
+}
+
+function renderMessages(options = {}) {
   const list = $('#messageList');
+  const shouldStick = options.forceScroll || isNearMessageBottom(list);
   list.innerHTML = '';
   if (!state.currentConversation) return;
   state.currentConversation.messages.forEach((message) => {
@@ -440,7 +448,19 @@ function renderMessages() {
     }
     list.appendChild(item);
   });
-  list.scrollTop = list.scrollHeight;
+  if (shouldStick) {
+    requestAnimationFrame(() => {
+      list.scrollTop = list.scrollHeight;
+    });
+  }
+}
+
+function scheduleMessageRender(options = {}) {
+  if (state.messageRenderFrame) return;
+  state.messageRenderFrame = requestAnimationFrame(() => {
+    state.messageRenderFrame = null;
+    renderMessages(options);
+  });
 }
 
 async function editMessage(message) {
@@ -503,7 +523,7 @@ async function sendMessage(textOverride = '') {
   const tempUser = { id: `tmp_${Date.now()}`, role: 'user', content, section: state.selectedSection, skills: selectedSkills, createdAt: new Date().toISOString() };
   const tempAssistant = { id: `stream_${Date.now()}`, role: 'assistant', content: '', section: state.selectedSection, pending: true, createdAt: new Date().toISOString() };
   state.currentConversation.messages.push(tempUser, tempAssistant);
-  renderMessages();
+  renderMessages({ forceScroll: true });
 
   try {
     const response = await fetch('/api/chat', {
@@ -574,7 +594,7 @@ function upsertToolMessage(payload, status, summary) {
     error: payload.error ? { message: payload.error } : message.tool?.error
   };
   message.content = summary;
-  renderMessages();
+  scheduleMessageRender();
 }
 
 function handleStreamPayload(payload, tempAssistant) {
@@ -598,7 +618,7 @@ function handleStreamPayload(payload, tempAssistant) {
   if (payload.token) {
     tempAssistant.pending = false;
     tempAssistant.content += payload.token;
-    renderMessages();
+    scheduleMessageRender();
   }
   if (payload.done && payload.message) {
     selectConversation(state.currentConversation.id).catch((error) => toast(error.message, 'error'));
@@ -1055,6 +1075,11 @@ function addPromptMessage(message = {}) {
   const list = $('#promptMessageList');
   const type = message.type || $('#newPromptType')?.value || 'normal';
   const locked = message.locked || LOCKED_TYPES.has(type);
+  const lockedHelp = {
+    skillSlot: '运行时自动展开所有 skills/*.md，拖动此块可决定固定 Skill 文档在预设中的位置。',
+    historySlot: '运行时插入当前会话历史，拖动此块可决定历史记录位置。',
+    inputSlot: '运行时插入本轮用户输入，可以在它前后放任意自定义提示词块。'
+  };
   const row = document.createElement('article');
   row.className = `prompt-message type-${type}`;
   row.dataset.id = message.id || `new_${Date.now()}_${Math.random()}`;
@@ -1081,7 +1106,12 @@ function addPromptMessage(message = {}) {
     row.className = `prompt-message type-${nextType}`;
     const textarea = row.querySelector('[data-field="content"]');
     textarea.disabled = isLocked;
-    if (isLocked) textarea.value = '';
+    if (isLocked) {
+      textarea.value = '';
+      textarea.placeholder = lockedHelp[nextType] || '运行时自动插入，不能编辑内容';
+    } else {
+      textarea.placeholder = '输入提示词内容';
+    }
   });
   list.appendChild(row);
 }
