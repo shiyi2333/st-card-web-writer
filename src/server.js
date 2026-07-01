@@ -45,7 +45,7 @@ app.use(express.static(publicDir));
 app.use('/exports', express.static(exportDir));
 
 function safeModel(model) {
-  return { ...model, apiKey: maskKey(model.apiKey) };
+  return { provider: 'openai', ...model, apiKey: maskKey(model.apiKey) };
 }
 
 function safeSettings(settings = store.data.settings) {
@@ -130,12 +130,16 @@ async function migrateStore() {
       data.activePromptId = generalPrompt.id;
     }
     data.models ||= [];
+    for (const model of data.models) {
+      model.provider = model.provider === 'anthropic' ? 'anthropic' : 'openai';
+    }
     if (!data.models.length) {
       const createdAt = nowIso();
       const modelId = id('model');
       data.models.push({
         id: modelId,
         name: 'DeepSeek V4 Pro',
+        provider: 'openai',
         baseUrl: 'https://api.deepseek.com',
         apiKey: '',
         model: 'deepseek-v4-pro',
@@ -431,6 +435,7 @@ app.post('/api/models', async (req, res, next) => {
     const model = {
       id: id('model'),
       name: req.body.name.trim(),
+      provider: req.body.provider === 'anthropic' ? 'anthropic' : 'openai',
       baseUrl: req.body.baseUrl.trim().replace(/\/+$/, ''),
       apiKey: String(req.body.apiKey || ''),
       model: req.body.model.trim(),
@@ -453,6 +458,7 @@ app.put('/api/models/:id', async (req, res) => {
   if (!model) return res.status(404).json({ error: '模型配置不存在' });
   await store.mutate(() => {
     if (req.body.name !== undefined) model.name = String(req.body.name).trim();
+    if (req.body.provider !== undefined) model.provider = req.body.provider === 'anthropic' ? 'anthropic' : 'openai';
     if (req.body.baseUrl !== undefined) model.baseUrl = String(req.body.baseUrl).trim().replace(/\/+$/, '');
     if (req.body.apiKey !== undefined) model.apiKey = String(req.body.apiKey);
     if (req.body.model !== undefined) model.model = String(req.body.model).trim();
@@ -523,6 +529,31 @@ app.post('/api/prompts/import-st', async (req, res, next) => {
       data.activePromptId = activePrompt.id;
     });
     res.json({ prompt: activePrompt, prompts: validPrompts, mapping, mappings, activeId: activePrompt.id });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/prompts/import', async (req, res, next) => {
+  try {
+    const source = req.body?.prompt || req.body;
+    if (!source || !Array.isArray(source.messages)) {
+      const error = new Error('不是本项目预设 JSON：缺少 prompt.messages');
+      error.status = 400;
+      throw error;
+    }
+    const prompt = normalizePromptForSave({
+      ...source,
+      id: id('prompt'),
+      name: source.name ? `${source.name}（导入）` : '导入预设',
+      createdAt: nowIso(),
+      updatedAt: nowIso()
+    });
+    await store.mutate((data) => {
+      data.prompts.push(prompt);
+      data.activePromptId = prompt.id;
+    });
+    res.json({ prompt, prompts: [prompt], mapping: [], mappings: [], activeId: prompt.id });
   } catch (error) {
     next(error);
   }

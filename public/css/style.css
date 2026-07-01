@@ -1371,6 +1371,25 @@ a:hover {
   padding: 8px;
 }
 
+.inject-field span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.macro-label {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  border-radius: 7px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
 .drag-handle {
   min-height: 34px;
   display: inline-flex;
@@ -1389,15 +1408,48 @@ a:hover {
 }
 
 .toggle {
+  min-height: 34px;
   display: inline-flex !important;
-  grid-template-columns: auto !important;
   align-items: center;
-  gap: 6px !important;
+  gap: 8px !important;
   white-space: nowrap;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
 }
 
 .toggle input {
-  width: auto;
+  width: 42px;
+  height: 23px;
+  appearance: none;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-2);
+  position: relative;
+  cursor: pointer;
+  transition: background 0.16s ease, border-color 0.16s ease;
+}
+
+.toggle input::before {
+  content: "";
+  position: absolute;
+  width: 17px;
+  height: 17px;
+  left: 2px;
+  top: 2px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: transform 0.16s ease, background 0.16s ease;
+}
+
+.toggle input:checked {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.toggle input:checked::before {
+  transform: translateX(18px);
+  background: var(--accent);
 }
 
 .empty-state {

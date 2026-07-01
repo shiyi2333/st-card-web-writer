@@ -64,10 +64,10 @@ function block(input = {}, index = 0) {
 
 function defaultGeneralBlocks() {
   return [
-    block({ type: 'head', role: 'system', title: '空开头', content: '', order: 10 }),
-    block({ type: 'main', role: 'system', title: '总简介提示词', content: GENERAL_ASSISTANT_PROMPT, order: 20 }),
+    block({ type: 'normal', role: 'system', title: '空开头', content: '', order: 10 }),
+    block({ type: 'normal', role: 'system', title: '总简介提示词', content: GENERAL_ASSISTANT_PROMPT, order: 20 }),
     block({ type: 'skillSlot', role: 'developer', title: '固定 Skill 文档', order: 30 }),
-    block({ type: 'tail', role: 'system', title: '空结尾', content: '', order: 40 })
+    block({ type: 'normal', role: 'system', title: '空结尾', content: '', order: 40 })
   ];
 }
 
@@ -195,20 +195,20 @@ function migrateGeneralAssistantPrompt(prompt = {}, messages = []) {
   const migrated = messages
     .filter((message) => message.type !== 'historySlot' && message.type !== 'inputSlot')
     .map((message) => {
-      if (message.type === 'head' && (message.title === '通用助手规则' || message.content.includes('通用助手'))) {
-        return block({ ...message, title: '空开头', content: '', order: 10 });
+      if ((message.type === 'head' || message.type === 'normal') && (message.title === '通用助手规则' || message.content.includes('通用助手'))) {
+        return block({ ...message, type: 'normal', title: '空开头', content: '', order: 10 });
       }
       return message;
     });
-  if (!migrated.some((message) => message.type === 'head')) {
-    migrated.unshift(block({ type: 'head', role: 'system', title: '空开头', content: '', order: 10 }));
+  if (!migrated.some((message) => message.title === '空开头')) {
+    migrated.unshift(block({ type: 'normal', role: 'system', title: '空开头', content: '', order: 10 }));
   }
-  if (!migrated.some((message) => message.type === 'main' && message.title === '总简介提示词')) {
-    const headOrder = migrated.find((message) => message.type === 'head')?.order ?? 10;
-    migrated.push(block({ type: 'main', role: 'system', title: '总简介提示词', content: GENERAL_ASSISTANT_PROMPT, order: headOrder + 1 }));
+  if (!migrated.some((message) => message.title === '总简介提示词')) {
+    const headOrder = migrated.find((message) => message.title === '空开头')?.order ?? 10;
+    migrated.push(block({ type: 'normal', role: 'system', title: '总简介提示词', content: GENERAL_ASSISTANT_PROMPT, order: headOrder + 1 }));
   }
-  if (!migrated.some((message) => message.type === 'tail')) {
-    migrated.push(block({ type: 'tail', role: 'system', title: '空结尾', content: '', order: 999 }));
+  if (!migrated.some((message) => message.title === '空结尾')) {
+    migrated.push(block({ type: 'normal', role: 'system', title: '空结尾', content: '', order: 999 }));
   }
   return migrated;
 }
@@ -302,8 +302,13 @@ export function buildMessages({
   let skillDocsInserted = false;
   let userPrefix = '';
 
+  const currentUserMessage = () => ({
+    role: 'user',
+    content: [userPrefix, skillPrefix, toolPrefix, `${sectionPrefix}${userText}`].filter(Boolean).join('\n\n')
+  });
+
   const historyWithDepthInjections = () => {
-    const merged = [...history];
+    const merged = [...history, currentUserMessage()];
     for (const item of historyInjectBlocks) {
       const depth = Number.isFinite(Number(item.injectionDepth)) ? Math.max(0, Number(item.injectionDepth)) : 0;
       const insertAt = Math.max(0, merged.length - depth);
@@ -324,10 +329,6 @@ export function buildMessages({
   const insertHistory = () => {
     if (historyInserted) return;
     output.push(...historyWithDepthInjections());
-    output.push({
-      role: 'user',
-      content: [userPrefix, skillPrefix, toolPrefix, `${sectionPrefix}${userText}`].filter(Boolean).join('\n\n')
-    });
     historyInserted = true;
   };
 
@@ -391,11 +392,7 @@ function isCustomDepthPrompt(source = {}, injection = {}) {
 
 function blockTypeForIdentifier(identifier = '', marker = false, injection = {}, source = {}) {
   if (identifier === 'chatHistory') return 'historySlot';
-  if (identifier === 'main') return 'main';
-  if (identifier === 'jailbreak' || identifier === 'nsfw') return 'tail';
-  if (identifier === 'dialogueExamples' || identifier === 'charDescription' || identifier === 'charPersonality' || identifier === 'scenario' || identifier === 'worldInfoBefore' || identifier === 'worldInfoAfter') return 'skill';
   if (!marker && isCustomDepthPrompt(source, injection)) return 'historyInject';
-  if (marker) return 'normal';
   return 'normal';
 }
 

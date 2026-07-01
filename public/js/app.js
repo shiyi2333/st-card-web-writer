@@ -5,16 +5,20 @@ import Sortable from '../vendor/sortable.esm.js';
 const CARD_SECTIONS = ['名称', '描述', '性格', '场景', '开场白', '作者备注', '标签', '绘图标签', '示例对话', '系统提示词', '备用开场白'];
 const ROLES = ['system', 'developer', 'user', 'assistant'];
 const BLOCK_TYPES = [
-  ['head', '固定头部'],
-  ['main', '主提示词'],
-  ['skill', 'skill指导块'],
+  ['normal', '普通块'],
+  ['historyInject', '深度块'],
   ['userPrefix', '用户输入前缀'],
   ['skillSlot', '固定 Skill 文档'],
   ['historySlot', '对话历史占位'],
-  ['historyInject', '历史深度插入'],
   ['inputSlot', '用户输入占位'],
-  ['tail', '固定尾部'],
-  ['normal', '普通块']
+  ['head', '固定头部'],
+  ['main', '主提示词'],
+  ['skill', 'skill指导块'],
+  ['tail', '固定尾部']
+];
+const EDITABLE_BLOCK_TYPES = [
+  ['normal', '普通块'],
+  ['historyInject', '深度块']
 ];
 const LOCKED_TYPES = new Set(['skillSlot', 'historySlot', 'inputSlot']);
 
@@ -1027,7 +1031,7 @@ function renderModels() {
   state.models.forEach((model) => {
     const button = document.createElement('button');
     button.className = `stack-item ${model.id === state.activeModelId ? 'active' : ''}`;
-    button.innerHTML = `<h3>${escapeHtml(model.name)}</h3><p>${escapeHtml(model.model)} / ${escapeHtml(model.apiKey || '未保存 key')}</p>`;
+    button.innerHTML = `<h3>${escapeHtml(model.name)}</h3><p>${escapeHtml(model.provider || 'openai')} / ${escapeHtml(model.model)} / ${escapeHtml(model.apiKey || '未保存 key')}</p>`;
     button.addEventListener('click', () => fillModelForm(model));
     list.appendChild(button);
   });
@@ -1038,6 +1042,7 @@ function renderModels() {
 function fillModelForm(model = {}) {
   $('#modelId').value = model.id || '';
   $('#modelName').value = model.name || '';
+  $('#modelProviderInput').value = model.provider || 'openai';
   $('#modelBaseUrl').value = model.baseUrl || 'https://api.deepseek.com';
   $('#modelApiKey').value = '';
   $('#modelApiKey').placeholder = model.apiKey || '留空则不修改已保存 key';
@@ -1050,6 +1055,7 @@ async function saveModel(event) {
   const idValue = $('#modelId').value;
   const body = {
     name: $('#modelName').value.trim(),
+    provider: $('#modelProviderInput').value,
     baseUrl: $('#modelBaseUrl').value.trim(),
     model: $('#modelIdText').value.trim(),
     temperature: Number($('#modelTemperature').value || 0.8)
@@ -1068,6 +1074,7 @@ async function saveModel(event) {
 
 async function fetchRemoteModels() {
   const body = {
+    provider: $('#modelProviderInput').value,
     baseUrl: $('#modelBaseUrl').value.trim(),
     apiKey: $('#modelApiKey').value,
     model: $('#modelIdText').value.trim()
@@ -1121,6 +1128,22 @@ function roleOptions(selected) {
   return ROLES.map((role) => `<option value="${role}" ${role === selected ? 'selected' : ''}>${role}</option>`).join('');
 }
 
+function defaultPromptMessages() {
+  return [
+    { type: 'normal', role: 'system', title: '空开头', content: '', enabled: true, order: 10 },
+    {
+      type: 'normal',
+      role: 'system',
+      title: '总简介提示词',
+      content: '你是一个通用助手，可以自然讨论各种主题，也可以在用户需要时协助完成写作、搜索、文件整理和 SillyTavern 角色卡制作。\n\n默认情况下按普通对话回答，不要主动输出角色卡 Markdown，也不要擅自进入固定角色卡格式。\n固定 Skill 文档会在运行时提供可用能力目录；只有用户意图明确或用户手动选择 skill 时，才读取并应用对应 skill。',
+      enabled: true,
+      order: 20
+    },
+    { type: 'skillSlot', role: 'developer', title: '固定 Skill 文档', enabled: true, locked: true, order: 30 },
+    { type: 'normal', role: 'system', title: '空结尾', content: '', enabled: true, order: 40 }
+  ];
+}
+
 function renderPromptMessages(messages) {
   const list = $('#promptMessageList');
   list.innerHTML = '';
@@ -1166,24 +1189,28 @@ function addPromptMessage(message = {}) {
     message.forbidOverrides ? 'forbid_overrides=true' : '',
     message.marker ? 'marker=true' : ''
   ].filter(Boolean);
+  const typeControl = locked
+    ? `<span class="macro-label">MACRO / ${escapeHtml(BLOCK_TYPES.find(([value]) => value === type)?.[1] || type)}</span><input type="hidden" data-field="type" value="${escapeHtml(type)}">`
+    : `<select data-field="type">${EDITABLE_BLOCK_TYPES.map(([value, label]) => `<option value="${value}" ${value === type ? 'selected' : ''}>${label}</option>`).join('')}</select>`;
+  const removeButton = locked ? '' : '<button type="button" class="mini-button danger" data-action="remove">删除</button>';
   row.innerHTML = `
     <div class="prompt-message-head">
       <span class="drag-handle">拖动</span>
-      <select data-field="type">${blockTypeOptions(type)}</select>
+      ${typeControl}
       <select data-field="role">${roleOptions(message.role || 'system')}</select>
       <input data-field="title" placeholder="提示词名称" value="${escapeHtml(message.title || BLOCK_TYPES.find(([value]) => value === type)?.[1] || '新提示词')}">
-      <label class="inject-field">深度 <input data-field="injectionDepth" type="number" min="0" step="1" value="${message.injectionDepth ?? 0}"></label>
+      <label class="inject-field">深度 <input data-field="injectionDepth" type="number" min="0" step="1" value="${message.injectionDepth ?? 0}"><span>0=用户下方，1=用户上方</span></label>
       <label class="inject-field">位置 <input data-field="injectionPosition" placeholder="ST position" value="${escapeHtml(message.injectionPosition || '')}"></label>
       <label class="toggle"><input data-field="enabled" type="checkbox" ${message.enabled === false ? '' : 'checked'}>启用</label>
-      <button type="button" class="mini-button danger" data-action="remove">删除</button>
+      ${removeButton}
     </div>
     ${metaParts.length ? `<div class="prompt-message-meta">${escapeHtml(metaParts.join(' / '))}</div>` : ''}
     ${locked ? `<div class="macro-help"><strong>MACRO / ${escapeHtml(BLOCK_TYPES.find(([value]) => value === type)?.[1] || type)}</strong><br>${escapeHtml(lockedHelp[type] || '运行时自动插入，不能编辑内容。')}${type === 'skillSlot' ? '<br><button type="button" class="mini-button" data-action="open-skills">文件列表</button>' : ''}</div>` : ''}
     <textarea data-field="content" rows="7" ${locked ? 'hidden disabled' : ''} placeholder="${locked ? '运行时自动插入，不能编辑内容' : '输入提示词内容'}">${escapeHtml(locked ? '' : message.content || '')}</textarea>
   `;
-  row.querySelector('[data-action="remove"]').addEventListener('click', () => row.remove());
+  row.querySelector('[data-action="remove"]')?.addEventListener('click', () => row.remove());
   row.querySelector('[data-action="open-skills"]')?.addEventListener('click', () => openSkillFiles().catch((error) => toast(error.message, 'error')));
-  row.querySelector('[data-field="type"]').addEventListener('change', (event) => {
+  row.querySelector('select[data-field="type"]')?.addEventListener('change', (event) => {
     const nextType = event.target.value;
     const isLocked = LOCKED_TYPES.has(nextType);
     row.dataset.locked = isLocked ? 'true' : 'false';
@@ -1265,7 +1292,8 @@ async function importStPreset(event) {
   const file = event.target.files?.[0];
   if (!file) return;
   const json = JSON.parse(await file.text());
-  const result = await api('/api/prompts/import-st', { method: 'POST', body: JSON.stringify(json) });
+  const endpoint = json?.type === 'st-card-web-writer-prompt-preset' ? '/api/prompts/import' : '/api/prompts/import-st';
+  const result = await api(endpoint, { method: 'POST', body: JSON.stringify(json) });
   const importedPrompts = (result.prompts || [result.prompt]).filter(Boolean);
   const mappings = result.mappings?.length ? result.mappings : [{ characterId: result.prompt?.messages?.[0]?.characterId, mapping: result.mapping || [] }];
   const summary = mappings.map((group, index) => {
@@ -1292,6 +1320,38 @@ async function importStPreset(event) {
   fillPromptForm(result.prompt);
   toast(`ST 预设已导入 ${importedPrompts.length} 个`);
   event.target.value = '';
+}
+
+function exportCurrentPrompt() {
+  const currentId = $('#promptId').value;
+  const existing = state.prompts.find((item) => item.id === currentId) || state.prompts.find((item) => item.id === state.activePromptId);
+  if (!existing && !$('#promptName').value.trim()) {
+    toast('没有可导出的预设', 'error');
+    return;
+  }
+  const prompt = {
+    ...(existing || {}),
+    id: currentId || existing?.id || `prompt_export_${Date.now()}`,
+    name: $('#promptName').value.trim() || existing?.name || '未命名预设',
+    messages: collectPromptMessages(),
+    exportedUnsavedForm: true
+  };
+  const payload = {
+    type: 'st-card-web-writer-prompt-preset',
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    prompt
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `${(prompt.name || 'prompt-preset').replace(/[\\/:*?"<>|]+/g, '_')}.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+  toast('预设已导出');
 }
 
 function wireEvents() {
@@ -1335,7 +1395,13 @@ function wireEvents() {
   $('#remoteModelSelect').addEventListener('change', (event) => {
     if (event.target.value) $('#modelIdText').value = event.target.value;
   });
-  $('#newPromptBtn').addEventListener('click', () => fillPromptForm({ name: '新预设', messages: [] }));
+  $('#modelProviderInput').addEventListener('change', (event) => {
+    if (event.target.value === 'anthropic') {
+      if (!$('#modelBaseUrl').value || $('#modelBaseUrl').value.includes('deepseek')) $('#modelBaseUrl').value = 'https://api.anthropic.com/v1';
+      if (!$('#modelIdText').value || $('#modelIdText').value.includes('deepseek')) $('#modelIdText').value = 'claude-sonnet-4-20250514';
+    }
+  });
+  $('#newPromptBtn').addEventListener('click', () => fillPromptForm({ name: '新预设', messages: defaultPromptMessages() }));
   $('#addPromptMessageBtn').addEventListener('click', () => addPromptMessage({ type: $('#newPromptType').value, role: 'system', enabled: true }));
   $('#openSkillFilesBtn').addEventListener('click', () => openSkillFiles().catch((error) => toast(error.message, 'error')));
   $('#closeSkillFilesBtn').addEventListener('click', closeSkillFiles);
@@ -1344,6 +1410,7 @@ function wireEvents() {
     if (event.target.id === 'skillFilesModal') closeSkillFiles();
   });
   $('#stPresetInput').addEventListener('change', (event) => importStPreset(event).catch((error) => toast(error.message, 'error')));
+  $('#exportPromptBtn').addEventListener('click', exportCurrentPrompt);
   $('#promptForm').addEventListener('submit', (event) => savePrompt(event).catch((error) => toast(error.message, 'error')));
   $('#settingsForm').addEventListener('submit', (event) => saveSettings(event).catch((error) => toast(error.message, 'error')));
   $('#useDeviceRootBtn').addEventListener('click', () => useDeviceWorkspaceRoot().catch((error) => toast(error.message, 'error')));

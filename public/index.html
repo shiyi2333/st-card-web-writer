@@ -178,20 +178,16 @@
               <label>预设名称<input id="promptName"></label>
               <div class="prompt-toolbar">
                 <select id="newPromptType">
-                  <option value="head">固定头部</option>
-                  <option value="main">主提示词</option>
-                  <option value="skill">skill指导块</option>
-                  <option value="userPrefix">用户输入前缀</option>
-                  <option value="tail">固定尾部</option>
                   <option value="normal">普通块</option>
-                  <option value="historySlot">对话历史占位</option>
+                  <option value="historyInject">深度块</option>
                 </select>
                 <button type="button" id="addPromptMessageBtn" class="ghost-button">添加块</button>
                 <button type="button" id="openSkillFilesBtn" class="ghost-button">Skill 文件</button>
                 <label class="file-import">
-                  <span>导入 ST JSON</span>
+                  <span>导入预设 JSON</span>
                   <input id="stPresetInput" type="file" accept="application/json,.json">
                 </label>
+                <button type="button" id="exportPromptBtn" class="ghost-button">导出当前预设</button>
               </div>
               <div id="importPreview" class="import-preview"></div>
               <div id="promptMessageList" class="prompt-message-list"></div>
@@ -221,6 +217,12 @@
             <form id="modelForm" class="form-card">
               <input type="hidden" id="modelId">
               <label>名称<input id="modelName" autocomplete="off"></label>
+              <label>接口类型
+                <select id="modelProviderInput">
+                  <option value="openai">OpenAI 兼容</option>
+                  <option value="anthropic">Anthropic</option>
+                </select>
+              </label>
               <label>API 根路径<input id="modelBaseUrl" placeholder="https://api.deepseek.com"></label>
               <label>API Key<input id="modelApiKey" type="password" autocomplete="new-password"></label>
               <label>模型 ID<input id="modelIdText" placeholder="deepseek-v4-pro"></label>
