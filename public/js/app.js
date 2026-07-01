@@ -43,7 +43,8 @@ const state = {
   carousel: null,
   carouselTimer: null,
   promptSortable: null,
-  messageRenderFrame: null
+  messageRenderFrame: null,
+  selectedSkillFilePath: ''
 };
 
 marked.setOptions({
@@ -223,6 +224,67 @@ function renderSelectedSkills() {
     });
     row.appendChild(chip);
   });
+}
+
+async function openSkillFiles() {
+  const modal = $('#skillFilesModal');
+  if (!modal) return;
+  modal.hidden = false;
+  await loadSkillFileTree();
+}
+
+function closeSkillFiles() {
+  const modal = $('#skillFilesModal');
+  if (modal) modal.hidden = true;
+}
+
+async function loadSkillFileTree() {
+  const payload = await api('/api/skill-files/tree');
+  const root = $('#skillFileTree');
+  if (!root) return;
+  root.innerHTML = renderSkillFileTree(payload.children || []);
+  $$('#skillFileTree [data-skill-file]').forEach((button) => {
+    button.addEventListener('click', () => loadSkillFile(button.dataset.skillFile).catch((error) => toast(error.message, 'error')));
+  });
+}
+
+function renderSkillFileTree(nodes = []) {
+  return nodes.map((node) => {
+    if (node.type === 'directory') {
+      return `
+        <div class="skill-tree-node">
+          <div class="skill-tree-title">▾ ${escapeHtml(node.name)}</div>
+          <div class="skill-tree-group">${renderSkillFileTree(node.children || [])}</div>
+        </div>
+      `;
+    }
+    const active = node.path === state.selectedSkillFilePath ? ' active' : '';
+    return `<button type="button" class="skill-tree-file${active}" data-skill-file="${escapeHtml(node.path)}">• ${escapeHtml(node.name)}</button>`;
+  }).join('');
+}
+
+async function loadSkillFile(filePath) {
+  const payload = await api(`/api/skill-files/file?path=${encodeURIComponent(filePath)}`);
+  state.selectedSkillFilePath = payload.path;
+  $('#skillFilePath').textContent = payload.path;
+  $('#skillFileContent').value = payload.content;
+  await loadSkillFileTree();
+}
+
+async function saveSkillFileFromModal() {
+  if (!state.selectedSkillFilePath) {
+    toast('先选择一个 skill 文件', 'error');
+    return;
+  }
+  await api('/api/skill-files/file', {
+    method: 'PUT',
+    body: JSON.stringify({
+      path: state.selectedSkillFilePath,
+      content: $('#skillFileContent').value
+    })
+  });
+  await loadSkills();
+  toast('Skill 文件已保存');
 }
 
 async function loadCarousel() {
@@ -1076,9 +1138,9 @@ function addPromptMessage(message = {}) {
   const type = message.type || $('#newPromptType')?.value || 'normal';
   const locked = message.locked || LOCKED_TYPES.has(type);
   const lockedHelp = {
-    skillSlot: '运行时自动展开所有 skills/*.md，拖动此块可决定固定 Skill 文档在预设中的位置。',
-    historySlot: '运行时插入当前会话历史，拖动此块可决定历史记录位置。',
-    inputSlot: '运行时插入本轮用户输入，可以在它前后放任意自定义提示词块。'
+    skillSlot: '运行时自动读取 skills/*.md 并组合成固定 Skill 文档。这个块只表示插入位置；内容请从 Skill 文件库打开编辑。',
+    historySlot: '运行时插入当前会话历史。导入 ST 预设时，ST 自带 chatHistory 会被剔除；即使没有此块，后端也会在末尾加入历史和本轮输入。',
+    inputSlot: '旧版兼容块；新预设不再需要单独的用户输入占位。'
   };
   const row = document.createElement('article');
   row.className = `prompt-message type-${type}`;
@@ -1116,9 +1178,11 @@ function addPromptMessage(message = {}) {
       <button type="button" class="mini-button danger" data-action="remove">删除</button>
     </div>
     ${metaParts.length ? `<div class="prompt-message-meta">${escapeHtml(metaParts.join(' / '))}</div>` : ''}
-    <textarea data-field="content" rows="7" ${locked ? 'disabled' : ''} placeholder="${locked ? '运行时自动插入，不能编辑内容' : '输入提示词内容'}">${escapeHtml(locked ? '' : message.content || '')}</textarea>
+    ${locked ? `<div class="macro-help"><strong>MACRO / ${escapeHtml(BLOCK_TYPES.find(([value]) => value === type)?.[1] || type)}</strong><br>${escapeHtml(lockedHelp[type] || '运行时自动插入，不能编辑内容。')}${type === 'skillSlot' ? '<br><button type="button" class="mini-button" data-action="open-skills">文件列表</button>' : ''}</div>` : ''}
+    <textarea data-field="content" rows="7" ${locked ? 'hidden disabled' : ''} placeholder="${locked ? '运行时自动插入，不能编辑内容' : '输入提示词内容'}">${escapeHtml(locked ? '' : message.content || '')}</textarea>
   `;
   row.querySelector('[data-action="remove"]').addEventListener('click', () => row.remove());
+  row.querySelector('[data-action="open-skills"]')?.addEventListener('click', () => openSkillFiles().catch((error) => toast(error.message, 'error')));
   row.querySelector('[data-field="type"]').addEventListener('change', (event) => {
     const nextType = event.target.value;
     const isLocked = LOCKED_TYPES.has(nextType);
@@ -1126,6 +1190,7 @@ function addPromptMessage(message = {}) {
     row.className = `prompt-message type-${nextType}`;
     const textarea = row.querySelector('[data-field="content"]');
     textarea.disabled = isLocked;
+    textarea.hidden = isLocked;
     if (isLocked) {
       textarea.value = '';
       textarea.placeholder = lockedHelp[nextType] || '运行时自动插入，不能编辑内容';
@@ -1210,7 +1275,7 @@ async function importStPreset(event) {
     const characterLabel = group.characterId !== null && group.characterId !== undefined ? `character_id=${group.characterId}` : `order ${index + 1}`;
     return escapeHtml(`${characterLabel}: ${rows.length} blocks, depth ${depthCount}, disabled ${disabledCount}`);
   }).join('<br>');
-  const activeMapping = mappings.at(-1)?.mapping || result.mapping || [];
+  const activeMapping = mappings.find((group) => group.promptId === result.activeId || group.promptId === result.prompt?.id)?.mapping || result.mapping || mappings.at(-1)?.mapping || [];
   const detail = activeMapping.slice(0, 36).map((item) => {
     const depth = item.injectionDepth !== null && item.injectionDepth !== undefined ? ` depth=${item.injectionDepth}` : '';
     const position = item.injectionPosition ? ` position=${item.injectionPosition}` : '';
@@ -1272,6 +1337,12 @@ function wireEvents() {
   });
   $('#newPromptBtn').addEventListener('click', () => fillPromptForm({ name: '新预设', messages: [] }));
   $('#addPromptMessageBtn').addEventListener('click', () => addPromptMessage({ type: $('#newPromptType').value, role: 'system', enabled: true }));
+  $('#openSkillFilesBtn').addEventListener('click', () => openSkillFiles().catch((error) => toast(error.message, 'error')));
+  $('#closeSkillFilesBtn').addEventListener('click', closeSkillFiles);
+  $('#saveSkillFileBtn').addEventListener('click', () => saveSkillFileFromModal().catch((error) => toast(error.message, 'error')));
+  $('#skillFilesModal').addEventListener('click', (event) => {
+    if (event.target.id === 'skillFilesModal') closeSkillFiles();
+  });
   $('#stPresetInput').addEventListener('change', (event) => importStPreset(event).catch((error) => toast(error.message, 'error')));
   $('#promptForm').addEventListener('submit', (event) => savePrompt(event).catch((error) => toast(error.message, 'error')));
   $('#settingsForm').addEventListener('submit', (event) => saveSettings(event).catch((error) => toast(error.message, 'error')));

@@ -185,9 +185,9 @@
                   <option value="tail">固定尾部</option>
                   <option value="normal">普通块</option>
                   <option value="historySlot">对话历史占位</option>
-                  <option value="inputSlot">用户输入占位</option>
                 </select>
                 <button type="button" id="addPromptMessageBtn" class="ghost-button">添加块</button>
+                <button type="button" id="openSkillFilesBtn" class="ghost-button">Skill 文件</button>
                 <label class="file-import">
                   <span>导入 ST JSON</span>
                   <input id="stPresetInput" type="file" accept="application/json,.json">
@@ -281,6 +281,28 @@
     <div class="fullscreen-actions">
       <button id="fullscreenFab" class="fullscreen-fab">横屏全屏</button>
       <button id="portraitFullscreenFab" class="fullscreen-fab secondary">竖屏全屏</button>
+    </div>
+
+    <div id="skillFilesModal" class="modal-overlay" hidden>
+      <div class="modal-card skill-files-modal">
+        <div class="modal-head">
+          <div>
+            <span class="eyebrow">skills/*.md</span>
+            <h2>Skill 文件库</h2>
+          </div>
+          <button id="closeSkillFilesBtn" class="icon-button" type="button">×</button>
+        </div>
+        <div class="skill-file-layout">
+          <div id="skillFileTree" class="skill-file-tree"></div>
+          <div class="skill-file-editor">
+            <div class="skill-file-editor-head">
+              <span id="skillFilePath">未选择文件</span>
+              <button id="saveSkillFileBtn" class="primary-button" type="button">保存</button>
+            </div>
+            <textarea id="skillFileContent" placeholder="从左侧选择一个 .md skill 文件"></textarea>
+          </div>
+        </div>
+      </div>
     </div>
 
     <nav class="mobile-tabs" id="mobileTabs">

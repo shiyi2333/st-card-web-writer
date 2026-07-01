@@ -34,7 +34,7 @@ export const CARD_SECTIONS = [
 export const GENERAL_ASSISTANT_PROMPT = `你是一个通用助手，可以自然讨论各种主题，也可以在用户需要时协助完成写作、搜索、文件整理和 SillyTavern 角色卡制作。
 
 默认情况下按普通对话回答，不要主动输出角色卡 Markdown，也不要擅自进入固定角色卡格式。
-工具使用说明会由系统在运行时固定提供。`;
+固定 Skill 文档会在运行时提供可用能力目录；只有用户意图明确或用户手动选择 skill 时，才读取并应用对应 skill。`;
 
 function block(input = {}, index = 0) {
   const type = PROMPT_BLOCK_TYPES.includes(input.type) ? input.type : 'normal';
@@ -62,14 +62,17 @@ function block(input = {}, index = 0) {
   };
 }
 
-export function makeDefaultPromptSet(createdAt = nowIso(), skills = DEFAULT_SKILLS) {
-  const blocks = [
-    block({ type: 'head', role: 'system', title: '通用助手规则', content: GENERAL_ASSISTANT_PROMPT, order: 10 }),
-    block({ type: 'skillSlot', role: 'developer', title: '固定 Skill 文档', order: 20 }),
-    block({ type: 'historySlot', role: 'system', title: '对话历史', order: 30 }),
-    block({ type: 'inputSlot', role: 'user', title: '用户输入', order: 40 })
+function defaultGeneralBlocks() {
+  return [
+    block({ type: 'head', role: 'system', title: '空开头', content: '', order: 10 }),
+    block({ type: 'main', role: 'system', title: '总简介提示词', content: GENERAL_ASSISTANT_PROMPT, order: 20 }),
+    block({ type: 'skillSlot', role: 'developer', title: '固定 Skill 文档', order: 30 }),
+    block({ type: 'tail', role: 'system', title: '空结尾', content: '', order: 40 })
   ];
+}
 
+export function makeDefaultPromptSet(createdAt = nowIso(), skills = DEFAULT_SKILLS) {
+  const blocks = defaultGeneralBlocks();
   return {
     id: id('prompt'),
     name: '通用助手',
@@ -134,24 +137,90 @@ function migrateLegacyMessage(message = {}, index = 0) {
   }, index);
 }
 
+function ensureRuntimeBlocks(messages = []) {
+  const withoutDuplicateRuntime = [];
+  let skillSlot = null;
+  let historySlot = null;
+
+  for (const message of messages) {
+    if (message.type === 'skillSlot') {
+      if (!skillSlot) skillSlot = message;
+      continue;
+    }
+    if (message.type === 'historySlot') {
+      if (!historySlot) historySlot = message;
+      continue;
+    }
+    if (message.type === 'inputSlot') {
+      continue;
+    }
+    withoutDuplicateRuntime.push(message);
+  }
+
+  const baseOrder = Math.max(900, ...withoutDuplicateRuntime.map((item) => Number(item.order) || 0)) + 10;
+  const historyOrder = historySlot ? Number(historySlot.order ?? baseOrder + 1) : null;
+  const skillOrder = Number(skillSlot?.order ?? (historyOrder !== null ? historyOrder - 1 : baseOrder));
+  const runtimeBlocks = [
+    block({
+      ...skillSlot,
+      type: 'skillSlot',
+      role: 'developer',
+      title: skillSlot?.title || '固定 Skill 文档',
+      order: skillOrder,
+      locked: true,
+      content: ''
+    })
+  ];
+
+  if (historySlot) {
+    runtimeBlocks.push(block({
+      ...historySlot,
+      type: 'historySlot',
+      role: historySlot.role || 'system',
+      title: historySlot.title || '对话历史',
+      order: historyOrder ?? skillOrder + 1,
+      locked: true,
+      content: ''
+    }));
+  }
+
+  return [
+    ...withoutDuplicateRuntime,
+    ...runtimeBlocks
+  ];
+}
+
+function migrateGeneralAssistantPrompt(prompt = {}, messages = []) {
+  if (prompt.kind !== 'generalAssistantV1') return messages;
+  const migrated = messages
+    .filter((message) => message.type !== 'historySlot' && message.type !== 'inputSlot')
+    .map((message) => {
+      if (message.type === 'head' && (message.title === '通用助手规则' || message.content.includes('通用助手'))) {
+        return block({ ...message, title: '空开头', content: '', order: 10 });
+      }
+      return message;
+    });
+  if (!migrated.some((message) => message.type === 'head')) {
+    migrated.unshift(block({ type: 'head', role: 'system', title: '空开头', content: '', order: 10 }));
+  }
+  if (!migrated.some((message) => message.type === 'main' && message.title === '总简介提示词')) {
+    const headOrder = migrated.find((message) => message.type === 'head')?.order ?? 10;
+    migrated.push(block({ type: 'main', role: 'system', title: '总简介提示词', content: GENERAL_ASSISTANT_PROMPT, order: headOrder + 1 }));
+  }
+  if (!migrated.some((message) => message.type === 'tail')) {
+    migrated.push(block({ type: 'tail', role: 'system', title: '空结尾', content: '', order: 999 }));
+  }
+  return migrated;
+}
+
 export function normalizePrompt(prompt = {}) {
   const createdAt = prompt.createdAt || nowIso();
   let messages = Array.isArray(prompt.messages) && prompt.messages.length
     ? prompt.messages.map(migrateLegacyMessage)
-    : [
-        block({ type: 'main', role: 'system', title: '生成提示词', content: prompt.system || GENERAL_ASSISTANT_PROMPT, order: 10 })
-      ];
+    : defaultGeneralBlocks();
 
-  if (!messages.some((item) => item.type === 'historySlot')) {
-    messages.push(block({ type: 'historySlot', title: '对话历史', order: 900 }));
-  }
-  if (!messages.some((item) => item.type === 'skillSlot')) {
-    const historyOrder = messages.find((item) => item.type === 'historySlot')?.order ?? 900;
-    messages.push(block({ type: 'skillSlot', role: 'developer', title: '固定 Skill 文档', order: historyOrder - 1 }));
-  }
-  if (!messages.some((item) => item.type === 'inputSlot')) {
-    messages.push(block({ type: 'inputSlot', title: '用户输入', order: 910 }));
-  }
+  messages = migrateGeneralAssistantPrompt(prompt, messages);
+  messages = ensureRuntimeBlocks(messages);
 
   messages = messages
     .map((message, index) => block(message, index))
@@ -230,7 +299,6 @@ export function buildMessages({
     : '';
   const output = [];
   let historyInserted = false;
-  let inputInserted = false;
   let skillDocsInserted = false;
   let userPrefix = '';
 
@@ -256,16 +324,11 @@ export function buildMessages({
   const insertHistory = () => {
     if (historyInserted) return;
     output.push(...historyWithDepthInjections());
-    historyInserted = true;
-  };
-
-  const insertInput = () => {
-    if (inputInserted) return;
     output.push({
       role: 'user',
       content: [userPrefix, skillPrefix, toolPrefix, `${sectionPrefix}${userText}`].filter(Boolean).join('\n\n')
     });
-    inputInserted = true;
+    historyInserted = true;
   };
 
   for (const item of blocks) {
@@ -281,8 +344,7 @@ export function buildMessages({
       continue;
     }
     if (item.type === 'inputSlot') {
-      if (!historyInserted) insertHistory();
-      insertInput();
+      insertHistory();
       continue;
     }
     if (item.type === 'userPrefix') {
@@ -294,18 +356,19 @@ export function buildMessages({
 
   if (!skillDocsInserted) insertSkillDocs();
   if (!historyInserted) insertHistory();
-  if (!inputInserted) insertInput();
   return output;
 }
 
 function promptContent(source = {}) {
-  if (source?.content !== undefined) return String(source.content || '');
-  if (typeof source?.system_prompt === 'string') return String(source.system_prompt || '');
+  for (const key of ['content', 'prompt', 'value', 'text']) {
+    if (source?.[key] !== undefined && source?.[key] !== null && String(source[key]).length) return String(source[key]);
+  }
+  if (typeof source?.system_prompt === 'string' && source.system_prompt.length) return String(source.system_prompt);
   return '';
 }
 
 function promptMarker(source = {}) {
-  return source?.marker === true || (source?.content === undefined && typeof source?.system_prompt !== 'string');
+  return source?.marker === true || !promptContent(source).trim();
 }
 
 function promptInjectionMeta(source = {}, orderItem = {}) {
@@ -343,7 +406,12 @@ export function importSillyTavernPreset(input = {}) {
     throw error;
   }
 
-  const prompts = new Map(input.prompts.map((prompt) => [prompt.identifier || prompt.name, prompt]));
+  const prompts = new Map();
+  for (const prompt of input.prompts) {
+    for (const key of [prompt.identifier, prompt.name, prompt.id].filter(Boolean)) {
+      prompts.set(key, prompt);
+    }
+  }
   const now = nowIso();
   const orderGroups = Array.isArray(input.prompt_order) && input.prompt_order.some((group) => Array.isArray(group.order))
     ? input.prompt_order
@@ -355,6 +423,7 @@ export function importSillyTavernPreset(input = {}) {
     const characterId = group.character_id ?? group.characterId ?? null;
     const blocks = [];
     const mapping = [];
+    let sawChatHistory = false;
 
     for (const item of ordered) {
       const identifier = item.identifier || item.name;
@@ -363,6 +432,25 @@ export function importSillyTavernPreset(input = {}) {
       const marker = promptMarker(source);
       const injection = promptInjectionMeta(source, item);
       const type = blockTypeForIdentifier(identifier, marker, injection, source);
+      if (type === 'historySlot') {
+        sawChatHistory = true;
+        mapping.push({
+          identifier,
+          title: source?.name || identifier || 'ST Prompt',
+          type: 'skippedChatHistory',
+          role: 'system',
+          enabled: item.enabled !== false && source.enabled !== false,
+          marker: true,
+          characterId,
+          order: blocks.length,
+          injectionDepth: null,
+          injectionPosition: '',
+          injectionOrder: null,
+          injectionTrigger: [],
+          skipped: true
+        });
+        continue;
+      }
       const title = source?.name || identifier || 'ST Prompt';
       const injectionOrder = source?.injection_order ?? source?.injectionOrder ?? item?.injection_order ?? item?.injectionOrder ?? null;
       const injectionTrigger = source?.injection_trigger ?? source?.injectionTrigger ?? item?.injection_trigger ?? item?.injectionTrigger ?? [];
@@ -403,9 +491,15 @@ export function importSillyTavernPreset(input = {}) {
       });
     }
 
-    if (!blocks.some((item) => item.type === 'inputSlot')) {
-      blocks.push(block({ type: 'inputSlot', title: '用户输入', order: (blocks.length + 1) * 10, characterId }, blocks.length));
-      mapping.push({ identifier: 'inputSlot', title: '用户输入', type: 'inputSlot', role: 'user', enabled: true, marker: true, characterId, order: blocks.length, injectionDepth: null, injectionPosition: '', injectionOrder: null, injectionTrigger: [] });
+    if (sawChatHistory) {
+      blocks.push(block({
+        type: 'historySlot',
+        role: 'system',
+        title: '对话历史',
+        locked: true,
+        characterId,
+        order: (blocks.length + 1) * 10
+      }, blocks.length));
     }
 
     const suffix = characterId !== null && characterId !== undefined ? ` / character ${characterId}` : (orderGroups.length > 1 ? ` / order ${groupIndex + 1}` : '');
@@ -422,11 +516,17 @@ export function importSillyTavernPreset(input = {}) {
   });
 
   const resultPrompts = imported.map((item) => item.prompt);
-  const resultMappings = imported.map((item) => ({ characterId: item.characterId, mapping: item.mapping }));
+  const resultMappings = imported.map((item) => ({ promptId: item.prompt.id, name: item.prompt.name, characterId: item.characterId, mapping: item.mapping }));
+  const activeIndex = resultPrompts.reduce((bestIndex, prompt, index) => {
+    const best = resultPrompts[bestIndex];
+    const score = prompt.messages.filter((item) => item.type !== 'skillSlot' && item.type !== 'historySlot' && item.type !== 'inputSlot').length;
+    const bestScore = best.messages.filter((item) => item.type !== 'skillSlot' && item.type !== 'historySlot' && item.type !== 'inputSlot').length;
+    return score >= bestScore ? index : bestIndex;
+  }, 0);
   return {
-    prompt: resultPrompts[0],
+    prompt: resultPrompts[activeIndex],
     prompts: resultPrompts,
-    mapping: imported[0]?.mapping || [],
+    mapping: imported[activeIndex]?.mapping || [],
     mappings: resultMappings
   };
 }

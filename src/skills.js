@@ -65,15 +65,87 @@ export const DEFAULT_SKILLS = [
   },
   {
     id: 'openclaw-erotic-style',
-    name: 'OpenClaw 肉感文风',
-    category: '文风',
-    description: '用于成人角色卡的作者备注、开场白和场景氛围增强，是 agent 可选的风格 skill。',
+    name: 'OpenClaw 肉感开场白文风',
+    category: '开场白',
+    description: '用于成人角色卡的开场白、作者备注和场景氛围增强，是 agent 可选的风格 skill。',
     actions: [],
-    prompt: '只用于明确成年且自愿的角色。写作者备注和开场白时，保持轻网文自然叙事，让语言、动作、神态、心理连续推进；用细腻感官、暧昧试探、欲望与后悔感制造张力。'
+    prompt: '只用于明确成年且自愿的角色。写开场白、作者备注和 first message 时，使用“你”代指玩家，角色叙述使用角色姓名、第三人称或自然代称；保持轻网文自然叙事，让语言、动作、神态、心理连续推进。'
   }
 ];
 
 let skillCache = null;
+
+function normalizeSkillFilePath(rawPath = '') {
+  return String(rawPath)
+    .trim()
+    .replace(/\\/g, '/')
+    .split('/')
+    .filter(Boolean)
+    .join('/');
+}
+
+function resolveSkillFilePath(rawPath = '') {
+  const relative = normalizeSkillFilePath(rawPath);
+  const fullPath = path.resolve(skillDir, relative);
+  if (fullPath !== skillDir && !fullPath.startsWith(`${skillDir}${path.sep}`)) {
+    throw new Error(`Invalid skill path: ${rawPath}`);
+  }
+  return { relative, fullPath };
+}
+
+function ensureMarkdownSkillFile(relative = '') {
+  if (!relative.endsWith('.md')) throw new Error('Skill files must use .md extension');
+}
+
+async function readSkillTree(dir = skillDir, prefix = '') {
+  const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+  const children = [];
+  for (const entry of entries.filter((item) => !item.name.startsWith('.')).sort((a, b) => {
+    if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
+    return a.name.localeCompare(b.name, 'zh-CN');
+  })) {
+    const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      children.push({
+        type: 'directory',
+        name: entry.name,
+        path: relative,
+        children: await readSkillTree(fullPath, relative)
+      });
+    } else if (entry.isFile() && entry.name.endsWith('.md')) {
+      children.push({
+        type: 'file',
+        name: entry.name,
+        path: relative
+      });
+    }
+  }
+  return children;
+}
+
+export async function listSkillFileTree() {
+  return {
+    root: 'skills',
+    children: await readSkillTree()
+  };
+}
+
+export async function readSkillFile(rawPath = '') {
+  const { relative, fullPath } = resolveSkillFilePath(rawPath);
+  ensureMarkdownSkillFile(relative);
+  const content = await fs.readFile(fullPath, 'utf8');
+  return { path: relative, content };
+}
+
+export async function saveSkillFile(rawPath = '', content = '') {
+  const { relative, fullPath } = resolveSkillFilePath(rawPath);
+  ensureMarkdownSkillFile(relative);
+  await fs.mkdir(path.dirname(fullPath), { recursive: true });
+  await fs.writeFile(fullPath, String(content || ''), 'utf8');
+  skillCache = null;
+  return { path: relative };
+}
 
 function parseFrontmatter(markdown = '') {
   const match = String(markdown).match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);

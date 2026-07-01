@@ -23,7 +23,7 @@ import {
   writeWorkspaceArtifact
 } from './workspace.js';
 import { searchDanbooru, tavilySearch } from './search.js';
-import { readSkillCatalog } from './skills.js';
+import { listSkillFileTree, readSkillCatalog, readSkillFile, saveSkillFile } from './skills.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -379,6 +379,24 @@ app.get('/api/skills', (req, res) => {
     .catch((error) => res.status(500).json({ error: error.message }));
 });
 
+app.get('/api/skill-files/tree', (req, res) => {
+  listSkillFileTree()
+    .then((payload) => res.json(payload))
+    .catch((error) => res.status(500).json({ error: error.message }));
+});
+
+app.get('/api/skill-files/file', (req, res) => {
+  readSkillFile(req.query.path)
+    .then((payload) => res.json(payload))
+    .catch((error) => res.status(400).json({ error: error.message }));
+});
+
+app.put('/api/skill-files/file', (req, res) => {
+  saveSkillFile(req.body.path, req.body.content)
+    .then((payload) => res.json(payload))
+    .catch((error) => res.status(400).json({ error: error.message }));
+});
+
 app.get('/api/settings', (req, res) => {
   res.json(safeSettings());
 });
@@ -499,7 +517,7 @@ app.post('/api/prompts/import-st', async (req, res, next) => {
   try {
     const { prompt, prompts = [prompt], mapping, mappings = [] } = importSillyTavernPreset(req.body || {});
     const validPrompts = prompts.filter(Boolean);
-    const activePrompt = validPrompts.at(-1) || prompt;
+    const activePrompt = validPrompts.find((item) => item.id === prompt?.id) || validPrompts.at(-1) || prompt;
     await store.mutate((data) => {
       data.prompts.push(...validPrompts);
       data.activePromptId = activePrompt.id;

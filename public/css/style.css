@@ -1188,6 +1188,12 @@ a:hover {
 .prompt-message.type-historySlot::before,
 .prompt-message.type-inputSlot::before { background: var(--muted); }
 
+.prompt-message.type-skillSlot,
+.prompt-message.type-historySlot,
+.prompt-message.type-inputSlot {
+  background: color-mix(in srgb, var(--surface) 76%, var(--accent-soft));
+}
+
 .drag-ghost {
   opacity: 0.58;
 }
@@ -1209,6 +1215,140 @@ a:hover {
   font-size: 11px;
   line-height: 1.45;
   word-break: break-word;
+}
+
+.macro-help {
+  margin: 0 0 10px;
+  padding: 11px 12px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 32%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--surface-2) 72%, transparent);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.macro-help strong {
+  color: var(--ink);
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(8, 10, 12, 0.62);
+  backdrop-filter: blur(8px);
+}
+
+.modal-overlay[hidden] {
+  display: none;
+}
+
+.modal-card {
+  width: min(1120px, 96vw);
+  max-height: min(760px, 92vh);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.28);
+  overflow: hidden;
+}
+
+.modal-head {
+  min-height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.skill-file-layout {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(220px, 310px) 1fr;
+  flex: 1;
+}
+
+.skill-file-tree {
+  overflow: auto;
+  padding: 12px;
+  border-right: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface-2) 55%, transparent);
+}
+
+.skill-tree-group {
+  margin-left: 10px;
+}
+
+.skill-tree-title,
+.skill-tree-file {
+  width: 100%;
+  min-height: 32px;
+  border: 0;
+  border-radius: 7px;
+  padding: 0 8px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  font: inherit;
+}
+
+.skill-tree-title {
+  color: var(--muted);
+  font-weight: 750;
+}
+
+.skill-tree-file {
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.skill-tree-file:hover,
+.skill-tree-file.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.skill-file-editor {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.skill-file-editor-head {
+  min-height: 54px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.skill-file-editor textarea {
+  flex: 1;
+  min-height: 420px;
+  border: 0;
+  border-radius: 0;
+  padding: 18px;
+  resize: none;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  line-height: 1.62;
+  background: var(--surface);
 }
 
 .inject-field {
@@ -1399,6 +1539,21 @@ a:hover {
   .split-pane,
   .prompt-layout {
     grid-template-columns: 1fr;
+  }
+
+  .modal-card {
+    width: 100%;
+    max-height: calc(100dvh - 28px);
+  }
+
+  .skill-file-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .skill-file-tree {
+    max-height: 190px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
   }
 
   .toolbar {
