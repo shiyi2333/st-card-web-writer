@@ -497,12 +497,14 @@ app.post('/api/prompts', async (req, res, next) => {
 
 app.post('/api/prompts/import-st', async (req, res, next) => {
   try {
-    const { prompt, mapping } = importSillyTavernPreset(req.body || {});
+    const { prompt, prompts = [prompt], mapping, mappings = [] } = importSillyTavernPreset(req.body || {});
+    const validPrompts = prompts.filter(Boolean);
+    const activePrompt = validPrompts.at(-1) || prompt;
     await store.mutate((data) => {
-      data.prompts.push(prompt);
-      data.activePromptId = prompt.id;
+      data.prompts.push(...validPrompts);
+      data.activePromptId = activePrompt.id;
     });
-    res.json({ prompt, mapping, activeId: prompt.id });
+    res.json({ prompt: activePrompt, prompts: validPrompts, mapping, mappings, activeId: activePrompt.id });
   } catch (error) {
     next(error);
   }

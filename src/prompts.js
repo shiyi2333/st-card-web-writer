@@ -40,6 +40,7 @@ function block(input = {}, index = 0) {
   const type = PROMPT_BLOCK_TYPES.includes(input.type) ? input.type : 'normal';
   const locked = input.locked === true || ['historySlot', 'inputSlot', 'skillSlot'].includes(type);
   const hasInjectionDepth = input.injectionDepth !== undefined && input.injectionDepth !== null && input.injectionDepth !== '';
+  const hasInjectionOrder = input.injectionOrder !== undefined && input.injectionOrder !== null && input.injectionOrder !== '';
   return {
     id: input.id || id('pb'),
     type,
@@ -51,7 +52,13 @@ function block(input = {}, index = 0) {
     order: Number(input.order ?? (index + 1) * 10),
     identifier: input.identifier || '',
     injectionDepth: hasInjectionDepth && Number.isFinite(Number(input.injectionDepth)) ? Math.max(0, Number(input.injectionDepth)) : null,
-    injectionPosition: input.injectionPosition || ''
+    injectionPosition: input.injectionPosition ?? '',
+    injectionOrder: hasInjectionOrder && Number.isFinite(Number(input.injectionOrder)) ? Number(input.injectionOrder) : null,
+    injectionTrigger: Array.isArray(input.injectionTrigger) ? input.injectionTrigger.map(String) : [],
+    forbidOverrides: input.forbidOverrides === true,
+    systemPrompt: input.systemPrompt === true,
+    marker: input.marker === true,
+    characterId: input.characterId ?? null
   };
 }
 
@@ -293,12 +300,12 @@ export function buildMessages({
 
 function promptContent(source = {}) {
   if (source?.content !== undefined) return String(source.content || '');
-  if (source?.system_prompt !== undefined) return String(source.system_prompt || '');
+  if (typeof source?.system_prompt === 'string') return String(source.system_prompt || '');
   return '';
 }
 
 function promptMarker(source = {}) {
-  return source?.marker === true || (source?.content === undefined && source?.system_prompt === undefined);
+  return source?.marker === true || (source?.content === undefined && typeof source?.system_prompt !== 'string');
 }
 
 function promptInjectionMeta(source = {}, orderItem = {}) {
@@ -313,12 +320,18 @@ function promptInjectionMeta(source = {}, orderItem = {}) {
   };
 }
 
-function blockTypeForIdentifier(identifier = '', marker = false, injection = {}) {
+function isCustomDepthPrompt(source = {}, injection = {}) {
+  if (!injection.isInjected) return false;
+  if (source?.system_prompt === false) return true;
+  return false;
+}
+
+function blockTypeForIdentifier(identifier = '', marker = false, injection = {}, source = {}) {
   if (identifier === 'chatHistory') return 'historySlot';
-  if (!marker && injection.isInjected) return 'historyInject';
   if (identifier === 'main') return 'main';
   if (identifier === 'jailbreak' || identifier === 'nsfw') return 'tail';
   if (identifier === 'dialogueExamples' || identifier === 'charDescription' || identifier === 'charPersonality' || identifier === 'scenario' || identifier === 'worldInfoBefore' || identifier === 'worldInfoAfter') return 'skill';
+  if (!marker && isCustomDepthPrompt(source, injection)) return 'historyInject';
   if (marker) return 'normal';
   return 'normal';
 }
@@ -331,54 +344,89 @@ export function importSillyTavernPreset(input = {}) {
   }
 
   const prompts = new Map(input.prompts.map((prompt) => [prompt.identifier || prompt.name, prompt]));
-  const ordered = Array.isArray(input.prompt_order?.[0]?.order)
-    ? input.prompt_order[0].order
-    : input.prompts.map((prompt) => ({ identifier: prompt.identifier || prompt.name, enabled: true }));
-
-  const blocks = [];
-  const mapping = [];
-  for (const item of ordered) {
-    const source = prompts.get(item.identifier);
-    const marker = promptMarker(source);
-    const injection = promptInjectionMeta(source, item);
-    const type = blockTypeForIdentifier(item.identifier, marker, injection);
-    const title = source?.name || item.identifier || 'ST Prompt';
-    blocks.push(block({
-      type,
-      role: ROLE_OPTIONS.includes(source?.role) ? source.role : 'system',
-      title,
-      content: marker ? '' : promptContent(source),
-      enabled: item.enabled !== false,
-      locked: type === 'historySlot',
-      identifier: item.identifier,
-      injectionDepth: type === 'historyInject' ? injection.depth : null,
-      injectionPosition: type === 'historyInject' ? injection.position : ''
-    }, blocks.length));
-    mapping.push({
-      identifier: item.identifier,
-      title,
-      type,
-      enabled: item.enabled !== false,
-      marker,
-      injectionDepth: type === 'historyInject' ? injection.depth : null,
-      injectionPosition: type === 'historyInject' ? injection.position : ''
-    });
-  }
-
-  if (!blocks.some((item) => item.type === 'inputSlot')) {
-    blocks.push(block({ type: 'inputSlot', title: '用户输入', order: (blocks.length + 1) * 10 }, blocks.length));
-    mapping.push({ identifier: 'inputSlot', title: '用户输入', type: 'inputSlot', enabled: true, marker: true });
-  }
-
   const now = nowIso();
-  const prompt = normalizePrompt({
-    id: id('prompt'),
-    name: input.name || input.preset_name || '导入的 ST 预设',
-    kind: 'st-import',
-    messages: blocks,
-    createdAt: now,
-    updatedAt: now
+  const orderGroups = Array.isArray(input.prompt_order) && input.prompt_order.some((group) => Array.isArray(group.order))
+    ? input.prompt_order
+    : [{ character_id: null, order: input.prompts.map((prompt) => ({ identifier: prompt.identifier || prompt.name, enabled: prompt.enabled !== false })) }];
+  const baseName = input.name || input.preset_name || input.presetName || '导入的 ST 预设';
+
+  const imported = orderGroups.map((group, groupIndex) => {
+    const ordered = Array.isArray(group.order) ? group.order : [];
+    const characterId = group.character_id ?? group.characterId ?? null;
+    const blocks = [];
+    const mapping = [];
+
+    for (const item of ordered) {
+      const identifier = item.identifier || item.name;
+      if (!identifier) continue;
+      const source = prompts.get(identifier) || {};
+      const marker = promptMarker(source);
+      const injection = promptInjectionMeta(source, item);
+      const type = blockTypeForIdentifier(identifier, marker, injection, source);
+      const title = source?.name || identifier || 'ST Prompt';
+      const injectionOrder = source?.injection_order ?? source?.injectionOrder ?? item?.injection_order ?? item?.injectionOrder ?? null;
+      const injectionTrigger = source?.injection_trigger ?? source?.injectionTrigger ?? item?.injection_trigger ?? item?.injectionTrigger ?? [];
+      const enabled = item.enabled !== false && source.enabled !== false;
+
+      blocks.push(block({
+        type,
+        role: ROLE_OPTIONS.includes(source?.role) ? source.role : 'system',
+        title,
+        content: marker ? '' : promptContent(source),
+        enabled,
+        locked: type === 'historySlot',
+        identifier,
+        injectionDepth: injection.isInjected ? injection.depth : null,
+        injectionPosition: injection.isInjected ? injection.position : '',
+        injectionOrder,
+        injectionTrigger: Array.isArray(injectionTrigger) ? injectionTrigger : [],
+        forbidOverrides: source?.forbid_overrides === true || source?.forbidOverrides === true,
+        systemPrompt: source?.system_prompt === true,
+        marker,
+        characterId
+      }, blocks.length));
+      mapping.push({
+        identifier,
+        title,
+        type,
+        role: ROLE_OPTIONS.includes(source?.role) ? source.role : 'system',
+        enabled,
+        marker,
+        characterId,
+        order: blocks.length,
+        injectionDepth: injection.isInjected ? injection.depth : null,
+        injectionPosition: injection.isInjected ? injection.position : '',
+        injectionOrder: injectionOrder === null ? null : Number(injectionOrder),
+        injectionTrigger: Array.isArray(injectionTrigger) ? injectionTrigger : [],
+        forbidOverrides: source?.forbid_overrides === true || source?.forbidOverrides === true,
+        systemPrompt: source?.system_prompt === true
+      });
+    }
+
+    if (!blocks.some((item) => item.type === 'inputSlot')) {
+      blocks.push(block({ type: 'inputSlot', title: '用户输入', order: (blocks.length + 1) * 10, characterId }, blocks.length));
+      mapping.push({ identifier: 'inputSlot', title: '用户输入', type: 'inputSlot', role: 'user', enabled: true, marker: true, characterId, order: blocks.length, injectionDepth: null, injectionPosition: '', injectionOrder: null, injectionTrigger: [] });
+    }
+
+    const suffix = characterId !== null && characterId !== undefined ? ` / character ${characterId}` : (orderGroups.length > 1 ? ` / order ${groupIndex + 1}` : '');
+    const prompt = normalizePrompt({
+      id: id('prompt'),
+      name: `${baseName}${suffix}`,
+      kind: 'st-import',
+      messages: blocks,
+      createdAt: now,
+      updatedAt: now
+    });
+
+    return { prompt, mapping, characterId };
   });
 
-  return { prompt, mapping };
+  const resultPrompts = imported.map((item) => item.prompt);
+  const resultMappings = imported.map((item) => ({ characterId: item.characterId, mapping: item.mapping }));
+  return {
+    prompt: resultPrompts[0],
+    prompts: resultPrompts,
+    mapping: imported[0]?.mapping || [],
+    mappings: resultMappings
+  };
 }

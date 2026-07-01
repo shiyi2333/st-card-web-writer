@@ -1085,6 +1085,25 @@ function addPromptMessage(message = {}) {
   row.dataset.id = message.id || `new_${Date.now()}_${Math.random()}`;
   row.dataset.locked = locked ? 'true' : 'false';
   row.dataset.identifier = message.identifier || '';
+  row.dataset.injectionDepth = message.injectionDepth ?? '';
+  row.dataset.injectionPosition = message.injectionPosition ?? '';
+  row.dataset.injectionOrder = message.injectionOrder ?? '';
+  row.dataset.injectionTrigger = JSON.stringify(Array.isArray(message.injectionTrigger) ? message.injectionTrigger : []);
+  row.dataset.forbidOverrides = message.forbidOverrides ? 'true' : 'false';
+  row.dataset.systemPrompt = message.systemPrompt ? 'true' : 'false';
+  row.dataset.marker = message.marker ? 'true' : 'false';
+  row.dataset.characterId = message.characterId ?? '';
+  const metaParts = [
+    message.characterId !== undefined && message.characterId !== null ? `character_id=${message.characterId}` : '',
+    message.identifier ? `identifier=${message.identifier}` : '',
+    message.role ? `role=${message.role}` : '',
+    message.injectionDepth !== undefined && message.injectionDepth !== null ? `depth=${message.injectionDepth}` : '',
+    message.injectionPosition ? `position=${message.injectionPosition}` : '',
+    message.injectionOrder !== undefined && message.injectionOrder !== null ? `injection_order=${message.injectionOrder}` : '',
+    Array.isArray(message.injectionTrigger) && message.injectionTrigger.length ? `trigger=${message.injectionTrigger.join(', ')}` : '',
+    message.forbidOverrides ? 'forbid_overrides=true' : '',
+    message.marker ? 'marker=true' : ''
+  ].filter(Boolean);
   row.innerHTML = `
     <div class="prompt-message-head">
       <span class="drag-handle">拖动</span>
@@ -1096,6 +1115,7 @@ function addPromptMessage(message = {}) {
       <label class="toggle"><input data-field="enabled" type="checkbox" ${message.enabled === false ? '' : 'checked'}>启用</label>
       <button type="button" class="mini-button danger" data-action="remove">删除</button>
     </div>
+    ${metaParts.length ? `<div class="prompt-message-meta">${escapeHtml(metaParts.join(' / '))}</div>` : ''}
     <textarea data-field="content" rows="7" ${locked ? 'disabled' : ''} placeholder="${locked ? '运行时自动插入，不能编辑内容' : '输入提示词内容'}">${escapeHtml(locked ? '' : message.content || '')}</textarea>
   `;
   row.querySelector('[data-action="remove"]').addEventListener('click', () => row.remove());
@@ -1116,10 +1136,27 @@ function addPromptMessage(message = {}) {
   list.appendChild(row);
 }
 
+function parsePromptJsonMeta(value, fallback = []) {
+  if (!value) return fallback;
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.map(String) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 function collectPromptMessages() {
   return $$('#promptMessageList .prompt-message').map((row, index) => {
     const type = row.querySelector('[data-field="type"]').value;
     const locked = LOCKED_TYPES.has(type);
+    const depthField = row.querySelector('[data-field="injectionDepth"]')?.value;
+    const positionField = row.querySelector('[data-field="injectionPosition"]')?.value.trim() || '';
+    const hasPreservedDepth = row.dataset.injectionDepth !== undefined && row.dataset.injectionDepth !== '';
+    const hasPreservedPosition = row.dataset.injectionPosition !== undefined && row.dataset.injectionPosition !== '';
+    const hasInjectionDepth = type === 'historyInject' || hasPreservedDepth;
+    const hasInjectionPosition = type === 'historyInject' || hasPreservedPosition;
+    const injectionOrder = row.dataset.injectionOrder !== undefined && row.dataset.injectionOrder !== '' ? Number(row.dataset.injectionOrder) : null;
     return {
       id: row.dataset.id.startsWith('new_') ? undefined : row.dataset.id,
       type,
@@ -1129,8 +1166,14 @@ function collectPromptMessages() {
       enabled: row.querySelector('[data-field="enabled"]').checked,
       locked,
       identifier: row.dataset.identifier || '',
-      injectionDepth: type === 'historyInject' ? Number(row.querySelector('[data-field="injectionDepth"]')?.value || 0) : null,
-      injectionPosition: type === 'historyInject' ? row.querySelector('[data-field="injectionPosition"]')?.value.trim() || '' : '',
+      injectionDepth: hasInjectionDepth ? Math.max(0, Number(depthField || 0) || 0) : null,
+      injectionPosition: hasInjectionPosition ? positionField : '',
+      injectionOrder: Number.isFinite(injectionOrder) ? injectionOrder : null,
+      injectionTrigger: parsePromptJsonMeta(row.dataset.injectionTrigger, []),
+      forbidOverrides: row.dataset.forbidOverrides === 'true',
+      systemPrompt: row.dataset.systemPrompt === 'true',
+      marker: row.dataset.marker === 'true',
+      characterId: row.dataset.characterId !== undefined && row.dataset.characterId !== '' ? Number(row.dataset.characterId) : null,
       order: (index + 1) * 10
     };
   });
@@ -1158,16 +1201,31 @@ async function importStPreset(event) {
   if (!file) return;
   const json = JSON.parse(await file.text());
   const result = await api('/api/prompts/import-st', { method: 'POST', body: JSON.stringify(json) });
+  const importedPrompts = (result.prompts || [result.prompt]).filter(Boolean);
+  const mappings = result.mappings?.length ? result.mappings : [{ characterId: result.prompt?.messages?.[0]?.characterId, mapping: result.mapping || [] }];
+  const summary = mappings.map((group, index) => {
+    const rows = group.mapping || [];
+    const depthCount = rows.filter((item) => item.injectionDepth !== null && item.injectionDepth !== undefined).length;
+    const disabledCount = rows.filter((item) => item.enabled === false).length;
+    const characterLabel = group.characterId !== null && group.characterId !== undefined ? `character_id=${group.characterId}` : `order ${index + 1}`;
+    return escapeHtml(`${characterLabel}: ${rows.length} blocks, depth ${depthCount}, disabled ${disabledCount}`);
+  }).join('<br>');
+  const activeMapping = mappings.at(-1)?.mapping || result.mapping || [];
+  const detail = activeMapping.slice(0, 36).map((item) => {
+    const depth = item.injectionDepth !== null && item.injectionDepth !== undefined ? ` depth=${item.injectionDepth}` : '';
+    const position = item.injectionPosition ? ` position=${item.injectionPosition}` : '';
+    const injectionOrder = item.injectionOrder !== null && item.injectionOrder !== undefined ? ` injection_order=${item.injectionOrder}` : '';
+    const role = item.role ? ` role=${item.role}` : '';
+    return escapeHtml(`${item.identifier || item.title} -> ${item.type}${role}${depth}${position}${injectionOrder}${item.enabled ? '' : ' disabled'}`);
+  }).join('<br>');
   $('#importPreview').innerHTML = `
-    <strong>已导入 ${escapeHtml(result.prompt.name)}</strong>
-    <p>${result.mapping.map((item) => {
-      const depth = item.type === 'historyInject' ? ` depth=${item.injectionDepth ?? 0}` : '';
-      return `${item.identifier || item.title} → ${item.type}${depth}${item.enabled ? '' : '（禁用）'}`;
-    }).join(' / ')}</p>
+    <strong>已导入 ${importedPrompts.length} 个 ST 预设，当前激活：${escapeHtml(result.prompt?.name || '')}</strong>
+    <p>${summary}</p>
+    <p>${detail}${activeMapping.length > 36 ? '<br>...' : ''}</p>
   `;
   await loadPrompts();
   fillPromptForm(result.prompt);
-  toast('ST 预设已导入');
+  toast(`ST 预设已导入 ${importedPrompts.length} 个`);
   event.target.value = '';
 }
 

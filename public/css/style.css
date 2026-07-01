@@ -1200,6 +1200,17 @@ a:hover {
   margin-bottom: 8px;
 }
 
+.prompt-message-meta {
+  margin: -2px 0 8px;
+  padding: 7px 9px;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--surface-2) 82%, transparent);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
 .inject-field {
   display: none !important;
   align-items: center;
