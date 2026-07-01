@@ -74,6 +74,43 @@ function markdownHtml(value) {
   return DOMPurify.sanitize(marked.parse(String(value || '')));
 }
 
+function compileThinkRegex() {
+  const pattern = state.settings.thinkBlockRegex || '<Think>([\\s\\S]*?)</Think>';
+  const rawFlags = state.settings.thinkBlockRegexFlags || 'gi';
+  const flags = [...new Set(String(rawFlags).replace(/[^dgimsuvy]/g, '').split(''))].join('');
+  try {
+    return new RegExp(pattern, flags.includes('g') ? flags : `${flags}g`);
+  } catch {
+    return /<Think>([\s\S]*?)<\/Think>/gi;
+  }
+}
+
+function markdownWithThoughtsHtml(value) {
+  const source = String(value || '');
+  const regex = compileThinkRegex();
+  let cursor = 0;
+  let html = '';
+  let matched = false;
+
+  for (const match of source.matchAll(regex)) {
+    if (!match[0]) continue;
+    matched = true;
+    if (match.index > cursor) html += markdownHtml(source.slice(cursor, match.index));
+    const thought = match[1] ?? match[0];
+    html += `
+      <details class="think-block">
+        <summary>思考过程</summary>
+        <div class="think-content">${markdownHtml(thought)}</div>
+      </details>
+    `;
+    cursor = match.index + match[0].length;
+  }
+
+  if (!matched) return markdownHtml(source);
+  if (cursor < source.length) html += markdownHtml(source.slice(cursor));
+  return html;
+}
+
 function formatDate(value) {
   if (!value) return '';
   return new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
@@ -157,6 +194,8 @@ function fillSettingsForm() {
   $('#imageCountInput').value = String(state.settings.imageResultCount || 10);
   $('#imageLimit').value = String(state.settings.imageResultCount || 10);
   $('#carouselTagsInput').value = state.settings.carouselTags || '1girl solo huge_breasts t-shirt';
+  $('#thinkRegexInput').value = state.settings.thinkBlockRegex || '<Think>([\\s\\S]*?)</Think>';
+  $('#thinkRegexFlagsInput').value = state.settings.thinkBlockRegexFlags || 'gi';
 }
 
 async function saveSettings(event) {
@@ -167,7 +206,9 @@ async function saveSettings(event) {
     developerRoleMode: $('#developerRoleModeInput').value,
     theme: $('#themeInput').value,
     imageResultCount: Number($('#imageCountInput').value),
-    carouselTags: $('#carouselTagsInput').value.trim()
+    carouselTags: $('#carouselTagsInput').value.trim(),
+    thinkBlockRegex: $('#thinkRegexInput').value.trim(),
+    thinkBlockRegexFlags: $('#thinkRegexFlagsInput').value.trim()
   };
   const key = $('#tavilyKeyInput').value.trim();
   if (key) body.tavilyKey = key;
@@ -492,7 +533,7 @@ function renderMessages(options = {}) {
           <span>${messageRoleName(message.role)}${message.section ? ` · ${escapeHtml(message.section)}` : ''}${skillNames ? ` · ${escapeHtml(skillNames)}` : ''}</span>
           <span>${formatDate(message.createdAt)}</span>
         </div>
-        <div class="message-markdown">${message.pending ? '<span class="spinner"></span><span class="pending-text">等待回复...</span>' : ''}${message.error ? `<div class="inline-error">${escapeHtml(message.error)}</div>` : markdownHtml(message.content)}</div>
+        <div class="message-markdown">${message.pending ? '<span class="spinner"></span><span class="pending-text">等待回复...</span>' : ''}${message.error ? `<div class="inline-error">${escapeHtml(message.error)}</div>` : markdownWithThoughtsHtml(message.content)}</div>
         <details class="source-details"><summary>源码</summary><pre>${escapeHtml(message.content)}</pre></details>
         <div class="message-actions">
           <button class="mini-button" data-action="edit">编辑</button>
@@ -1140,7 +1181,8 @@ function defaultPromptMessages() {
       order: 20
     },
     { type: 'skillSlot', role: 'developer', title: '固定 Skill 文档', enabled: true, locked: true, order: 30 },
-    { type: 'normal', role: 'system', title: '空结尾', content: '', enabled: true, order: 40 }
+    { type: 'historySlot', role: 'system', title: '对话历史', enabled: true, locked: true, order: 40 },
+    { type: 'normal', role: 'system', title: '空结尾', content: '', enabled: true, order: 50 }
   ];
 }
 

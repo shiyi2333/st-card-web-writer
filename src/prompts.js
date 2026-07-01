@@ -67,7 +67,8 @@ function defaultGeneralBlocks() {
     block({ type: 'normal', role: 'system', title: '空开头', content: '', order: 10 }),
     block({ type: 'normal', role: 'system', title: '总简介提示词', content: GENERAL_ASSISTANT_PROMPT, order: 20 }),
     block({ type: 'skillSlot', role: 'developer', title: '固定 Skill 文档', order: 30 }),
-    block({ type: 'normal', role: 'system', title: '空结尾', content: '', order: 40 })
+    block({ type: 'historySlot', role: 'system', title: '对话历史', order: 40 }),
+    block({ type: 'normal', role: 'system', title: '空结尾', content: '', order: 50 })
   ];
 }
 
@@ -97,7 +98,9 @@ export function defaultStore(options = {}) {
       imageResultCount: 10,
       theme: 'system',
       developerRoleMode: 'compat',
-      carouselTags: '1girl solo huge_breasts t-shirt'
+      carouselTags: '1girl solo huge_breasts t-shirt',
+      thinkBlockRegex: '<Think>([\\s\\S]*?)</Think>',
+      thinkBlockRegexFlags: 'gi'
     },
     usedImages: {
       global: [],
@@ -158,8 +161,8 @@ function ensureRuntimeBlocks(messages = []) {
   }
 
   const baseOrder = Math.max(900, ...withoutDuplicateRuntime.map((item) => Number(item.order) || 0)) + 10;
-  const historyOrder = historySlot ? Number(historySlot.order ?? baseOrder + 1) : null;
-  const skillOrder = Number(skillSlot?.order ?? (historyOrder !== null ? historyOrder - 1 : baseOrder));
+  const historyOrder = Number(historySlot?.order ?? (Number(skillSlot?.order ?? baseOrder) + 1));
+  const skillOrder = Number(skillSlot?.order ?? historyOrder - 1);
   const runtimeBlocks = [
     block({
       ...skillSlot,
@@ -172,17 +175,15 @@ function ensureRuntimeBlocks(messages = []) {
     })
   ];
 
-  if (historySlot) {
-    runtimeBlocks.push(block({
-      ...historySlot,
-      type: 'historySlot',
-      role: historySlot.role || 'system',
-      title: historySlot.title || '对话历史',
-      order: historyOrder ?? skillOrder + 1,
-      locked: true,
-      content: ''
-    }));
-  }
+  runtimeBlocks.push(block({
+    ...historySlot,
+    type: 'historySlot',
+    role: historySlot?.role || 'system',
+    title: historySlot?.title || '对话历史',
+    order: historyOrder,
+    locked: true,
+    content: ''
+  }));
 
   return [
     ...withoutDuplicateRuntime,
@@ -193,7 +194,7 @@ function ensureRuntimeBlocks(messages = []) {
 function migrateGeneralAssistantPrompt(prompt = {}, messages = []) {
   if (prompt.kind !== 'generalAssistantV1') return messages;
   const migrated = messages
-    .filter((message) => message.type !== 'historySlot' && message.type !== 'inputSlot')
+    .filter((message) => message.type !== 'inputSlot')
     .map((message) => {
       if ((message.type === 'head' || message.type === 'normal') && (message.title === '通用助手规则' || message.content.includes('通用助手'))) {
         return block({ ...message, type: 'normal', title: '空开头', content: '', order: 10 });

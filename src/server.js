@@ -110,6 +110,8 @@ async function migrateStore() {
     data.settings.theme ||= 'system';
     data.settings.developerRoleMode ||= 'compat';
     data.settings.carouselTags ||= '1girl solo huge_breasts t-shirt';
+    data.settings.thinkBlockRegex ||= '<Think>([\\s\\S]*?)</Think>';
+    data.settings.thinkBlockRegexFlags ||= 'gi';
     data.usedImages ||= { global: [], workspaces: {} };
     data.usedImages.global ||= [];
     data.usedImages.workspaces ||= {};
@@ -415,6 +417,11 @@ app.put('/api/settings', async (req, res) => {
     if (req.body.theme !== undefined) data.settings.theme = ['light', 'dark', 'system'].includes(req.body.theme) ? req.body.theme : 'system';
     if (req.body.developerRoleMode !== undefined) data.settings.developerRoleMode = req.body.developerRoleMode === 'native' ? 'native' : 'compat';
     if (req.body.carouselTags !== undefined) data.settings.carouselTags = String(req.body.carouselTags || '').trim() || '1girl solo huge_breasts t-shirt';
+    if (req.body.thinkBlockRegex !== undefined) data.settings.thinkBlockRegex = String(req.body.thinkBlockRegex || '').trim() || '<Think>([\\s\\S]*?)</Think>';
+    if (req.body.thinkBlockRegexFlags !== undefined) {
+      const flags = [...new Set(String(req.body.thinkBlockRegexFlags || 'gi').replace(/[^dgimsuvy]/g, '').split(''))].join('');
+      data.settings.thinkBlockRegexFlags = flags.includes('g') ? flags : `${flags}g`;
+    }
     if (req.body.useDeviceDefaultWorkspaceRoot) data.settings.workspaceRoot = defaultWorkspaceRoot();
   });
   await ensureWorkspace(store.data.settings);
