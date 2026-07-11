@@ -5,7 +5,7 @@ import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { JsonStore, id, maskKey, nowIso } from './store.js';
 import { defaultStore, buildMessages, ensurePromptSkillCatalog, importSillyTavernPreset, makeDefaultPromptSet, normalizePrompt, normalizePromptForSave } from './prompts.js';
-import { chatJson, chatStream, fetchModels } from './ai.js';
+import { chatJson, chatStream, chatText, fetchModels } from './ai.js';
 import { latestAssistantMarkdown, makeCardJson, previewFromMarkdown } from './card.js';
 import { writeCardPng } from './png.js';
 import {
@@ -22,8 +22,10 @@ import {
   workspaceRoot,
   writeWorkspaceArtifact
 } from './workspace.js';
-import { searchDanbooru, tavilySearch } from './search.js';
+import { tavilySearch } from './search.js';
+import { searchDanbooru } from './danbooru.js';
 import { listSkillFileTree, readSkillCatalog, readSkillFile, saveSkillFile } from './skills.js';
+import { CardQueue } from './queue.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -116,16 +118,14 @@ async function migrateStore() {
     data.usedImages.global ||= [];
     data.usedImages.workspaces ||= {};
     data.imageCache ||= [];
-    data.prompts = (data.prompts || []).map(normalizePrompt);
+    data.cardQueue ||= { tasks: [] };
+    data.cardQueue.tasks ||= [];
+    data.prompts ||= [];
     let generalPrompt = data.prompts.find((prompt) => prompt.kind === 'generalAssistantV1');
     if (!generalPrompt) {
       const defaultPrompt = makeDefaultPromptSet();
       data.prompts.unshift(defaultPrompt);
       generalPrompt = defaultPrompt;
-    } else {
-      const index = data.prompts.findIndex((prompt) => prompt.id === generalPrompt.id);
-      data.prompts[index] = ensurePromptSkillCatalog(generalPrompt);
-      generalPrompt = data.prompts[index];
     }
     const activePrompt = data.prompts.find((prompt) => prompt.id === data.activePromptId);
     if (!activePrompt || activePrompt.kind === 'lobsterCardV3') {
@@ -178,6 +178,115 @@ function workspaceUsedImageIds() {
     ...(store.data.usedImages.workspaces?.[name] || [])
   ];
 }
+
+async function chatTextForQueue(userText) {
+  const model = activeModel();
+  const prompt = activePrompt();
+  if (!model?.apiKey) {
+    const error = new Error('请先保存可用的 API Key');
+    error.status = 400;
+    throw error;
+  }
+  if (!prompt) {
+    const error = new Error('请先启用提示词预设');
+    error.status = 400;
+    throw error;
+  }
+  const skills = await readSkillCatalog();
+  const selectedSkills = ['character-card-writer', 'st-card-style-guide'].filter((skillId) => skills.some((skill) => skill.id === skillId));
+  const messages = buildMessages({
+    prompt,
+    conversation: { messages: [] },
+    userText,
+    section: '',
+    developerRoleMode: store.data.settings.developerRoleMode || 'compat',
+    selectedSkills,
+    skillCatalog: skills,
+    toolResults: []
+  });
+  return chatText({ config: model, messages, temperature: Number(model.temperature ?? 0.8) });
+}
+
+async function makeQueueConversation({ title, userText, assistantText }) {
+  const createdAt = nowIso();
+  const conversation = {
+    id: id('conv'),
+    title: String(title || '队列角色卡').trim(),
+    createdAt,
+    updatedAt: createdAt,
+    messages: [
+      {
+        id: id('msg'),
+        role: 'user',
+        content: userText || '',
+        section: '',
+        skills: ['character-card-writer', 'st-card-style-guide'],
+        createdAt,
+        editHistory: [],
+        tools: []
+      },
+      {
+        id: id('msg'),
+        role: 'assistant',
+        content: assistantText || '',
+        section: '',
+        createdAt,
+        editHistory: [],
+        tools: []
+      }
+    ]
+  };
+  await store.mutate((data) => data.conversations.push(conversation));
+  return conversation.id;
+}
+
+async function exportCardFromMarkdown({ markdown, conversationId }) {
+  if (!markdown) {
+    const error = new Error('没有可导出的角色卡 Markdown');
+    error.status = 400;
+    throw error;
+  }
+  const conversation = findConversation(conversationId);
+  const cardJson = makeCardJson(markdown);
+  const safeName = safeFileName(cardJson.name, 'character');
+  const stamp = Date.now();
+  const jsonFile = `${safeName}_${stamp}.json`;
+  const mdFile = `${safeName}_${stamp}.md`;
+  const workspace = await ensureWorkspace(store.data.settings);
+  const jsonPath = await writeWorkspaceArtifact(store.data.settings, jsonFile, JSON.stringify(cardJson, null, 2), { temp: false });
+  const mdPath = await writeWorkspaceArtifact(store.data.settings, mdFile, markdown, { temp: false });
+  const result = {
+    ok: true,
+    name: cardJson.name,
+    workspace: workspace.name,
+    json: `/api/workspaces/file?name=${encodeURIComponent(path.basename(jsonPath))}`,
+    markdown: `/api/workspaces/file?name=${encodeURIComponent(path.basename(mdPath))}`,
+    preview: previewFromMarkdown(markdown)
+  };
+  if (conversation) {
+    await appendToolMessage(conversation, {
+      action: 'export-card',
+      status: 'ok',
+      summary: `已导出队列角色卡: ${cardJson.name}`,
+      result: {
+        workspace: workspace.name,
+        json: path.basename(jsonPath),
+        markdown: path.basename(mdPath)
+      },
+      createdAt: nowIso()
+    });
+  }
+  return result;
+}
+
+const cardQueue = new CardQueue({
+  id,
+  now: nowIso,
+  store,
+  chatText: chatTextForQueue,
+  exportCard: exportCardFromMarkdown,
+  makeConversation: makeQueueConversation
+});
 
 async function appendToolMessage(conversation, tool) {
   const message = {
@@ -802,6 +911,84 @@ app.post('/api/chat', async (req, res, next) => {
     } else {
       next(error);
     }
+  }
+});
+
+app.get('/api/queue', (req, res) => {
+  res.json(cardQueue.snapshot());
+});
+
+app.post('/api/queue/tasks', async (req, res, next) => {
+  try {
+    const task = await cardQueue.createTask(req.body || {});
+    res.json({ ok: true, task, queue: cardQueue.snapshot() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put('/api/queue/tasks/:id', async (req, res, next) => {
+  try {
+    const task = await cardQueue.updateTask(req.params.id, req.body || {});
+    if (!task) return res.status(404).json({ error: '队列任务不存在' });
+    res.json({ ok: true, task, queue: cardQueue.snapshot() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put('/api/queue/tasks/:taskId/items/:itemId', async (req, res, next) => {
+  try {
+    const task = await cardQueue.updateItem(req.params.taskId, req.params.itemId, req.body || {});
+    if (!task) return res.status(404).json({ error: '队列条目不存在' });
+    res.json({ ok: true, task, queue: cardQueue.snapshot() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/queue/run', async (req, res, next) => {
+  try {
+    cardQueue.resume(req.body?.taskId || '').catch((error) => console.error('queue run failed:', error));
+    res.json({ ok: true, queue: cardQueue.snapshot() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/queue/pause', async (req, res, next) => {
+  try {
+    await cardQueue.pause();
+    res.json({ ok: true, queue: cardQueue.snapshot() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/queue/resume', async (req, res, next) => {
+  try {
+    cardQueue.resume(req.body?.taskId || '').catch((error) => console.error('queue resume failed:', error));
+    res.json({ ok: true, queue: cardQueue.snapshot() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/queue/cancel', async (req, res, next) => {
+  try {
+    await cardQueue.cancel(req.body?.taskId || '');
+    res.json({ ok: true, queue: cardQueue.snapshot() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/queue/retry', async (req, res, next) => {
+  try {
+    cardQueue.retry(req.body?.taskId || '', req.body?.itemId || '').catch((error) => console.error('queue retry failed:', error));
+    res.json({ ok: true, queue: cardQueue.snapshot() });
+  } catch (error) {
+    next(error);
   }
 });
 

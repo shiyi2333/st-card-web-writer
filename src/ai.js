@@ -161,6 +161,34 @@ export async function chatJson({ config, messages, temperature = 0.1 }) {
   return JSON.parse(jsonText);
 }
 
+export async function chatText({ config, messages, temperature = 0.8 }) {
+  if (provider(config) === 'anthropic') {
+    return chatTextAnthropic({ config, messages, temperature });
+  }
+
+  const response = await fetch(apiUrl(config, '/chat/completions'), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${config.apiKey}`
+    },
+    body: JSON.stringify({
+      model: config.model,
+      messages,
+      temperature,
+      stream: false
+    })
+  });
+
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`妯″瀷璇锋眰澶辫触: ${response.status} ${detail}`);
+  }
+
+  const payload = await response.json();
+  return payload.choices?.[0]?.message?.content || '';
+}
+
 async function chatStreamAnthropic({ config, messages, onToken }) {
   const normalized = normalizeAnthropicMessages(messages);
   const response = await fetch(apiUrl(config, '/messages'), {

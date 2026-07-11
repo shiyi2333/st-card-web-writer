@@ -48,7 +48,9 @@ const state = {
   carouselTimer: null,
   promptSortable: null,
   messageRenderFrame: null,
-  selectedSkillFilePath: ''
+  selectedSkillFilePath: '',
+  queue: { tasks: [] },
+  queueTimer: null
 };
 
 marked.setOptions({
@@ -844,6 +846,13 @@ function renderImageResults(payload) {
   const grid = $('#imageResults');
   grid.innerHTML = '';
   $('#imagePageLine').textContent = `下一页 ${state.imageSearch.page}`;
+  const queryLine = (payload.queries || []).map((query) => query.tags?.join(' ')).filter(Boolean).slice(0, 4).join(' / ');
+  const warningLine = (payload.warnings || []).slice(0, 2).join(' | ');
+  $('#selectedImageLine').innerHTML = [
+    payload.rankedTags?.length ? `Ranked tags: ${escapeHtml(payload.rankedTags.slice(0, 10).join(' '))}` : '',
+    queryLine ? `Queries: ${escapeHtml(queryLine)}` : '',
+    warningLine ? `Warnings: ${escapeHtml(warningLine)}` : ''
+  ].filter(Boolean).join('<br>') || $('#selectedImageLine').innerHTML;
   if (!payload.results.length) {
     grid.innerHTML = '<div class="empty-state">没有找到可用图片，放宽 tag 或换成 t-shirt / huge_breasts / hair color 试试。</div>';
     return;
@@ -856,7 +865,7 @@ function renderImageResults(payload) {
       <img src="${proxy}" alt="Danbooru ${image.id}" loading="lazy">
       <div class="image-meta">
         <strong>#${image.id}</strong>
-        <span>rating:${escapeHtml(image.rating)} score:${escapeHtml(image.score)}</span>
+        <span>rating:${escapeHtml(image.rating)} score:${escapeHtml(image.score)} match:${escapeHtml((image.matchedTags || []).join(' '))}</span>
         <p>${escapeHtml(image.tags.slice(0, 12).join(' '))}</p>
         <div class="button-row">
           <button class="mini-button" data-action="select">选择</button>
@@ -1396,11 +1405,173 @@ function exportCurrentPrompt() {
   toast('预设已导出');
 }
 
+async function loadQueue() {
+  state.queue = await api('/api/queue');
+  renderQueue();
+}
+
+function queueStatusName(status) {
+  return {
+    queued: '等待中',
+    running: '生成中',
+    paused: '已暂停',
+    done: '已完成',
+    failed: '有失败',
+    cancelled: '已取消'
+  }[status] || status || '未知';
+}
+
+function queueItemLinks(item) {
+  const links = [];
+  if (item.conversationId) {
+    links.push(`<button class="mini-button" data-action="open-conversation" data-conversation="${escapeHtml(item.conversationId)}">打开对话</button>`);
+  }
+  if (item.exportResult?.markdown) links.push(`<a class="mini-link" href="${escapeHtml(item.exportResult.markdown)}" target="_blank">Markdown</a>`);
+  if (item.exportResult?.json) links.push(`<a class="mini-link" href="${escapeHtml(item.exportResult.json)}" target="_blank">JSON</a>`);
+  if (item.status === 'failed' || item.status === 'cancelled') {
+    links.push(`<button class="mini-button" data-action="retry-item" data-item="${escapeHtml(item.id)}">重试</button>`);
+  }
+  return links.join('');
+}
+
+function renderQueue() {
+  const tasks = state.queue?.tasks || [];
+  const list = $('#queueTaskList');
+  const statusLine = $('#queueStatusLine');
+  if (!list || !statusLine) return;
+  const running = tasks.find((task) => task.status === 'running');
+  statusLine.textContent = running ? `生成中：${running.title}` : `${tasks.length} 个任务`;
+  if (!tasks.length) {
+    list.innerHTML = '<div class="empty-card">还没有队列任务。</div>';
+    return;
+  }
+  list.innerHTML = tasks.map((task) => {
+    const done = (task.items || []).filter((item) => item.status === 'done').length;
+    const total = (task.items || []).length || task.count || 0;
+    const percent = total ? Math.round((done / total) * 100) : 0;
+    return `
+      <article class="queue-task ${escapeHtml(task.status)}" data-task="${escapeHtml(task.id)}">
+        <div class="queue-task-head">
+          <div>
+            <strong>${escapeHtml(task.title)}</strong>
+            <p>${escapeHtml(task.mode === 'outline' ? '先列设定再完善' : '直接多卡生成')} / ${queueStatusName(task.status)} / ${done}/${total || task.count}</p>
+          </div>
+          <div class="queue-task-actions">
+            <button class="mini-button" data-action="run-task">开始</button>
+            <button class="mini-button" data-action="retry-task">重试失败</button>
+            <button class="mini-button" data-action="cancel-task">取消</button>
+          </div>
+        </div>
+        <div class="queue-progress"><span style="width:${percent}%"></span></div>
+        <div class="queue-items">
+          ${(task.items || []).map((item, index) => `
+            <div class="queue-item ${escapeHtml(item.status)}">
+              <div>
+                <strong>${index + 1}. ${escapeHtml(item.title || item.brief || '未命名角色')}</strong>
+                <p>${escapeHtml(item.brief || '')}</p>
+                ${item.error ? `<p class="inline-error">${escapeHtml(item.error)}</p>` : ''}
+              </div>
+              <div class="queue-item-actions">
+                <span class="mode-pill">${queueStatusName(item.status)}</span>
+                ${queueItemLinks(item)}
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      </article>
+    `;
+  }).join('');
+
+  $$('#queueTaskList [data-action="run-task"]').forEach((button) => {
+    button.addEventListener('click', () => runQueue(button.closest('[data-task]')?.dataset.task).catch((error) => toast(error.message, 'error')));
+  });
+  $$('#queueTaskList [data-action="retry-task"]').forEach((button) => {
+    button.addEventListener('click', () => retryQueue(button.closest('[data-task]')?.dataset.task).catch((error) => toast(error.message, 'error')));
+  });
+  $$('#queueTaskList [data-action="cancel-task"]').forEach((button) => {
+    button.addEventListener('click', () => cancelQueue(button.closest('[data-task]')?.dataset.task).catch((error) => toast(error.message, 'error')));
+  });
+  $$('#queueTaskList [data-action="retry-item"]').forEach((button) => {
+    button.addEventListener('click', () => retryQueue(button.closest('[data-task]')?.dataset.task, button.dataset.item).catch((error) => toast(error.message, 'error')));
+  });
+  $$('#queueTaskList [data-action="open-conversation"]').forEach((button) => {
+    button.addEventListener('click', () => selectConversation(button.dataset.conversation).then(() => setTab('chat')).catch((error) => toast(error.message, 'error')));
+  });
+}
+
+async function createQueueTask(event) {
+  event.preventDefault();
+  const body = {
+    title: $('#queueTitle').value.trim(),
+    mode: $('#queueMode').value,
+    count: Number($('#queueCount').value || 1),
+    autoExport: $('#queueAutoExport').checked,
+    seedText: $('#queueSeedText').value.trim(),
+    itemsText: $('#queueItemsText').value.trim()
+  };
+  if (!body.seedText && !body.itemsText) return toast('先写任务说明或条目', 'error');
+  const payload = await api('/api/queue/tasks', { method: 'POST', body: JSON.stringify(body) });
+  state.queue = payload.queue;
+  renderQueue();
+  toast('已加入生成队列');
+}
+
+async function runQueue(taskId = '') {
+  const payload = await api('/api/queue/run', { method: 'POST', body: JSON.stringify({ taskId }) });
+  state.queue = payload.queue;
+  renderQueue();
+  startQueuePolling();
+  toast('队列开始运行');
+}
+
+async function pauseQueue() {
+  const payload = await api('/api/queue/pause', { method: 'POST', body: JSON.stringify({}) });
+  state.queue = payload.queue;
+  renderQueue();
+  toast('队列已暂停');
+}
+
+async function cancelQueue(taskId = '') {
+  const payload = await api('/api/queue/cancel', { method: 'POST', body: JSON.stringify({ taskId }) });
+  state.queue = payload.queue;
+  renderQueue();
+  toast('队列已取消');
+}
+
+async function retryQueue(taskId = '', itemId = '') {
+  const payload = await api('/api/queue/retry', { method: 'POST', body: JSON.stringify({ taskId, itemId }) });
+  state.queue = payload.queue;
+  renderQueue();
+  startQueuePolling();
+  toast('已重新加入队列');
+}
+
+function startQueuePolling() {
+  if (state.queueTimer) clearInterval(state.queueTimer);
+  state.queueTimer = setInterval(async () => {
+    try {
+      await loadQueue();
+      const active = (state.queue?.tasks || []).some((task) => ['queued', 'running', 'paused'].includes(task.status));
+      if (!active && state.queueTimer) {
+        clearInterval(state.queueTimer);
+        state.queueTimer = null;
+      }
+    } catch (error) {
+      console.warn('queue polling failed:', error);
+    }
+  }, 2500);
+}
+
 function wireEvents() {
   $$('.tab-button').forEach((button) => button.addEventListener('click', () => setTab(button.dataset.tab)));
   $('#fullscreenFab').addEventListener('click', requestLandscapeFullscreen);
   $('#portraitFullscreenFab').addEventListener('click', requestPortraitFullscreen);
   $('#addSkillBtn').addEventListener('click', addSelectedSkill);
+  $('#queueForm')?.addEventListener('submit', (event) => createQueueTask(event).catch((error) => toast(error.message, 'error')));
+  $('#runQueueBtn')?.addEventListener('click', () => runQueue().catch((error) => toast(error.message, 'error')));
+  $('#pauseQueueBtn')?.addEventListener('click', () => pauseQueue().catch((error) => toast(error.message, 'error')));
+  $('#cancelQueueBtn')?.addEventListener('click', () => cancelQueue().catch((error) => toast(error.message, 'error')));
+  $('#refreshQueueBtn')?.addEventListener('click', () => loadQueue().catch((error) => toast(error.message, 'error')));
   $('#mobileConversationToggle')?.addEventListener('click', toggleMobileConversationDrawer);
   $('#mobileConversationClose')?.addEventListener('click', closeMobileConversationDrawer);
   $('#newConversationBtn').addEventListener('click', () => createConversation().catch((error) => toast(error.message, 'error')));
@@ -1464,6 +1635,8 @@ async function init() {
   await loadWorkspaces().catch((error) => toast(error.message, 'error'));
   await loadCarousel().catch((error) => toast(error.message, 'error'));
   await loadConversations();
+  await loadQueue().catch((error) => toast(error.message, 'error'));
+  if ((state.queue?.tasks || []).some((task) => ['queued', 'running', 'paused'].includes(task.status))) startQueuePolling();
 }
 
 init().catch((error) => toast(error.message, 'error'));

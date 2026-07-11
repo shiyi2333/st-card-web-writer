@@ -18,6 +18,111 @@
   --soft-shadow: 0 8px 22px rgba(29, 43, 39, 0.08);
 }
 
+.queue-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.9fr) minmax(320px, 1.1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.queue-form textarea {
+  min-height: 96px;
+}
+
+.queue-task-list {
+  display: grid;
+  gap: 12px;
+}
+
+.queue-task {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 12px;
+}
+
+.queue-task.running {
+  border-color: var(--accent);
+}
+
+.queue-task.failed {
+  border-color: var(--danger);
+}
+
+.queue-task-head,
+.queue-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.queue-task-head p,
+.queue-item p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.queue-task-actions,
+.queue-item-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.queue-progress {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-2);
+  margin: 12px 0;
+}
+
+.queue-progress span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.2s ease;
+}
+
+.queue-items {
+  display: grid;
+  gap: 8px;
+}
+
+.queue-item {
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.queue-item.done strong {
+  color: var(--accent);
+}
+
+.queue-item.failed strong,
+.queue-item.cancelled strong {
+  color: var(--danger);
+}
+
+@media (max-width: 860px) {
+  .queue-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .queue-task-head,
+  .queue-item {
+    display: grid;
+  }
+
+  .queue-task-actions,
+  .queue-item-actions {
+    justify-content: flex-start;
+  }
+}
+
 :root[data-theme="dark"] {
   color-scheme: dark;
   --bg: #111816;
