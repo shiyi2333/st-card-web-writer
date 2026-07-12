@@ -111,6 +111,21 @@ export async function removeWorkspaceItem(settings, name) {
   await fs.rm(target, { recursive: true, force: true });
 }
 
+export async function removeNonPngWorkspaceFiles(settings) {
+  const workspace = await ensureWorkspace(settings);
+  const entries = await fs.readdir(workspace.dir, { withFileTypes: true });
+  const removed = [];
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    if (entry.name === '.st-card-index.json') continue;
+    if (path.extname(entry.name).toLowerCase() === '.png') continue;
+    const target = ensureInside(workspace.root, path.join(workspace.dir, entry.name));
+    await fs.rm(target, { force: true });
+    removed.push(entry.name);
+  }
+  return { workspace: workspace.name, removed };
+}
+
 export async function renameWorkspaceItem(settings, from, to) {
   const workspace = await ensureWorkspace(settings);
   const source = ensureInside(workspace.root, path.join(workspace.dir, safeFileName(from)));

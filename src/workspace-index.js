@@ -69,3 +69,28 @@ export async function recordWorkspaceCard(settings = {}, record = {}) {
   await fs.writeFile(indexPath(workspace), JSON.stringify(index, null, 2), 'utf8');
   return { ...index, workspace: workspace.name };
 }
+
+export async function removeWorkspaceIndexSidecars(settings = {}, removedNames = []) {
+  const removed = new Set((removedNames || []).map(String));
+  if (!removed.size) return readWorkspaceIndex(settings);
+  const workspace = await ensureWorkspace(settings);
+  const index = await readRawIndex(workspace);
+  let changed = false;
+  for (const card of index.cards) {
+    let cardChanged = false;
+    if (card.json && removed.has(card.json)) {
+      card.json = '';
+      cardChanged = true;
+    }
+    if (card.markdown && removed.has(card.markdown)) {
+      card.markdown = '';
+      cardChanged = true;
+    }
+    if (cardChanged) {
+      card.updatedAt = new Date().toISOString();
+      changed = true;
+    }
+  }
+  if (changed) await fs.writeFile(indexPath(workspace), JSON.stringify(index, null, 2), 'utf8');
+  return { ...index, workspace: workspace.name };
+}

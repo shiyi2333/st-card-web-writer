@@ -824,10 +824,12 @@ function renderPreview() {
   const stats = $('#previewStats');
   const grid = $('#sectionPreview');
   const json = $('#jsonPreview');
+  const repairButton = $('#repairCardBtn');
   stats.innerHTML = '';
   grid.innerHTML = '';
   if (!state.preview) {
     json.textContent = '';
+    if (repairButton) repairButton.hidden = true;
     return;
   }
 
@@ -844,6 +846,7 @@ function renderPreview() {
     stats.appendChild(pill);
   });
   const validation = state.preview.validation;
+  if (repairButton) repairButton.hidden = validation?.status !== 'error';
   if (validation) {
     const pill = document.createElement('span');
     pill.className = `stat-pill validation-${escapeHtml(validation.status)}`;
@@ -873,6 +876,32 @@ function renderPreview() {
   json.textContent = JSON.stringify(state.preview.json, null, 2);
 }
 
+async function repairCurrentCard() {
+  if (!state.currentConversation) return;
+  const messageId = $('#messageSelect').value || undefined;
+  await repairCardInConversation(state.currentConversation.id, messageId);
+}
+
+async function repairCardInConversation(conversationId, messageId = undefined) {
+  const result = await maybeRunAction('修复当前角色卡缺失章节和格式', () => api('/api/cards/repair', {
+    method: 'POST',
+    body: JSON.stringify({ conversationId, messageId })
+  }));
+  if (!result) return;
+  if (!result.repaired) {
+    toast('当前卡没有结构性 error，不需要自动修复');
+    return;
+  }
+  await selectConversation(conversationId);
+  if (result.message?.id) {
+    $('#messageSelect').value = result.message.id;
+    state.preview = result.preview;
+    renderPreview();
+    setTab('preview');
+  }
+  toast(result.validation?.status === 'error' ? '已生成修复版，但仍有 error，请检查' : '已生成修复版角色卡');
+}
+
 async function exportCard(withPng) {
   if (!state.currentConversation) return;
   if (withPng && !state.avatarDataUrl) {
@@ -886,13 +915,14 @@ async function exportCard(withPng) {
       conversationId: state.currentConversation.id,
       messageId: $('#messageSelect').value || undefined,
       avatarDataUrl: withPng ? state.avatarDataUrl : '',
-      selectedImage: state.selectedImage
+      selectedImage: state.selectedImage,
+      cleanupSidecars: Boolean(withPng)
     })
   }));
   if (!result) return;
   $('#exportResult').innerHTML = [
-    `<a href="${result.json}" target="_blank">JSON</a>`,
-    `<a href="${result.markdown}" target="_blank">Markdown</a>`,
+    result.json ? `<a href="${result.json}" target="_blank">JSON</a>` : '',
+    result.markdown ? `<a href="${result.markdown}" target="_blank">Markdown</a>` : '',
     result.png ? `<a href="${result.png}" target="_blank">PNG</a>` : ''
   ].filter(Boolean).join('');
   state.preview = result.preview;
@@ -1166,6 +1196,15 @@ async function deleteFile(name) {
   if (!confirm(`确认删除 ${name}？这个操作不能撤销。`)) return;
   await api('/api/workspaces/item', { method: 'DELETE', body: JSON.stringify({ name }) });
   await loadFiles();
+}
+
+async function clearNonPngFiles() {
+  if (!confirm('清空当前工作区所有非 PNG 文件？会保留 PNG、文件夹和内部索引。')) return;
+  const payload = await api('/api/workspaces/non-png', { method: 'DELETE', body: JSON.stringify({}) });
+  state.files = payload.files || [];
+  state.workspaceIndex = payload.index || state.workspaceIndex || { cards: [] };
+  renderFiles();
+  toast(`已清理 ${payload.removed?.length || 0} 个非 PNG 文件`);
 }
 
 async function moveFile(name) {
@@ -1541,6 +1580,9 @@ function queueItemLinks(item) {
   }
   if (item.exportResult?.markdown) links.push(`<a class="mini-link" href="${escapeHtml(item.exportResult.markdown)}" target="_blank">Markdown</a>`);
   if (item.exportResult?.json) links.push(`<a class="mini-link" href="${escapeHtml(item.exportResult.json)}" target="_blank">JSON</a>`);
+  if ((item.validation || item.exportResult?.validation)?.status === 'error' && item.conversationId) {
+    links.push(`<button class="mini-button" data-action="repair-item" data-conversation="${escapeHtml(item.conversationId)}">修复</button>`);
+  }
   if (item.status === 'failed' || item.status === 'cancelled') {
     links.push(`<button class="mini-button" data-action="retry-item" data-item="${escapeHtml(item.id)}">重试</button>`);
   }
@@ -1615,6 +1657,9 @@ function renderQueue() {
   });
   $$('#queueTaskList [data-action="retry-item"]').forEach((button) => {
     button.addEventListener('click', () => retryQueue(button.closest('[data-task]')?.dataset.task, button.dataset.item).catch((error) => toast(error.message, 'error')));
+  });
+  $$('#queueTaskList [data-action="repair-item"]').forEach((button) => {
+    button.addEventListener('click', () => repairCardInConversation(button.dataset.conversation).catch((error) => toast(error.message, 'error')));
   });
   $$('#queueTaskList [data-action="open-conversation"]').forEach((button) => {
     button.addEventListener('click', () => selectConversation(button.dataset.conversation).then(() => setTab('chat')).catch((error) => toast(error.message, 'error')));
@@ -1715,6 +1760,7 @@ function wireEvents() {
   });
   $('#previewBtn').addEventListener('click', () => refreshPreview().then(() => setTab('preview')).catch((error) => toast(error.message, 'error')));
   $('#refreshPreviewBtn').addEventListener('click', () => refreshPreview().catch((error) => toast(error.message, 'error')));
+  $('#repairCardBtn')?.addEventListener('click', () => repairCurrentCard().catch((error) => toast(error.message, 'error')));
   $('#exportJsonBtn').addEventListener('click', () => exportCard(false).catch((error) => toast(error.message, 'error')));
   $('#exportPngBtn').addEventListener('click', () => exportCard(true).catch((error) => toast(error.message, 'error')));
   $('#searchImagesBtn').addEventListener('click', () => searchImages(true).catch((error) => toast(error.message, 'error')));
@@ -1724,6 +1770,7 @@ function wireEvents() {
   $('#renameWorkspaceBtn').addEventListener('click', () => renameWorkspace().catch((error) => toast(error.message, 'error')));
   $('#deleteWorkspaceBtn').addEventListener('click', () => deleteWorkspace().catch((error) => toast(error.message, 'error')));
   $('#workspaceSelect').addEventListener('change', () => switchWorkspace().catch((error) => toast(error.message, 'error')));
+  $('#clearNonPngBtn')?.addEventListener('click', () => clearNonPngFiles().catch((error) => toast(error.message, 'error')));
   $('#refreshFilesBtn').addEventListener('click', () => loadFiles().catch((error) => toast(error.message, 'error')));
   $('#newModelBtn').addEventListener('click', () => fillModelForm({}));
   $('#modelForm').addEventListener('submit', (event) => saveModel(event).catch((error) => toast(error.message, 'error')));

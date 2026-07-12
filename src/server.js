@@ -15,6 +15,7 @@ import {
   listWorkspaceFiles,
   listWorkspaces,
   moveWorkspaceItem,
+  removeNonPngWorkspaceFiles,
   removeWorkspaceItem,
   renameWorkspaceItem,
   resolveWorkspace,
@@ -27,7 +28,7 @@ import { searchDanbooru } from './danbooru.js';
 import { listSkillFileTree, readSkillCatalog, readSkillFile, saveSkillFile } from './skills.js';
 import { CardQueue } from './queue.js';
 import { validateCardMarkdown, validationRepairPrompt } from './validator.js';
-import { readWorkspaceIndex, recordWorkspaceCard } from './workspace-index.js';
+import { readWorkspaceIndex, recordWorkspaceCard, removeWorkspaceIndexSidecars } from './workspace-index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -1165,6 +1166,63 @@ app.post('/api/cards/validate', (req, res) => {
   res.json(validateCardMarkdown(markdown));
 });
 
+app.post('/api/cards/repair', async (req, res, next) => {
+  try {
+    const conversation = findConversation(req.body.conversationId);
+    const markdown = req.body.markdown || latestAssistantMarkdown(conversation, req.body.messageId);
+    if (!markdown) return res.status(400).json({ error: '没有可修复的角色卡 Markdown' });
+    const beforeValidation = validateCardMarkdown(markdown);
+    if (beforeValidation.status !== 'error' && !req.body.force) {
+      return res.json({
+        ok: true,
+        repaired: false,
+        markdown,
+        validation: beforeValidation,
+        preview: { ...previewFromMarkdown(markdown), validation: beforeValidation }
+      });
+    }
+    const repairedMarkdown = await chatTextForQueue(validationRepairPrompt(markdown, beforeValidation));
+    const validation = validateCardMarkdown(repairedMarkdown);
+    let message = null;
+    if (conversation) {
+      const createdAt = nowIso();
+      message = {
+        id: id('msg'),
+        role: 'assistant',
+        content: repairedMarkdown,
+        section: '',
+        createdAt,
+        editHistory: [],
+        tools: [
+          {
+            action: 'card-format-repair',
+            status: validation.status,
+            sourceMessageId: req.body.messageId || '',
+            before: beforeValidation,
+            after: validation,
+            createdAt
+          }
+        ]
+      };
+      await store.mutate(() => {
+        conversation.messages.push(message);
+        conversation.updatedAt = createdAt;
+      });
+    }
+    res.json({
+      ok: true,
+      repaired: true,
+      message,
+      markdown: repairedMarkdown,
+      beforeValidation,
+      validation,
+      preview: { ...previewFromMarkdown(repairedMarkdown), validation }
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post('/api/cards/export', async (req, res, next) => {
   try {
     const conversation = findConversation(req.body.conversationId);
@@ -1181,6 +1239,7 @@ app.post('/api/cards/export', async (req, res, next) => {
     const mdPath = await writeWorkspaceArtifact(store.data.settings, mdFile, markdown, { temp: false });
 
     let pngPath = null;
+    let removedSidecars = [];
     if (req.body.avatarDataUrl) {
       const pngFile = `${safeName}_${stamp}.png`;
       pngPath = path.join(workspace.dir, pngFile);
@@ -1189,6 +1248,11 @@ app.post('/api/cards/export', async (req, res, next) => {
         cardJson,
         outputPath: pngPath
       });
+      if (req.body.cleanupSidecars !== false) {
+        await fs.rm(jsonPath, { force: true });
+        await fs.rm(mdPath, { force: true });
+        removedSidecars = [path.basename(jsonPath), path.basename(mdPath)];
+      }
     }
     if (conversation) {
       await appendToolMessage(conversation, {
@@ -1197,8 +1261,8 @@ app.post('/api/cards/export', async (req, res, next) => {
         summary: `已导出角色卡: ${cardJson.name}`,
         result: {
           workspace: workspace.name,
-          json: path.basename(jsonPath),
-          markdown: path.basename(mdPath),
+          json: removedSidecars.includes(path.basename(jsonPath)) ? null : path.basename(jsonPath),
+          markdown: removedSidecars.includes(path.basename(mdPath)) ? null : path.basename(mdPath),
           png: pngPath ? path.basename(pngPath) : null
         },
         createdAt: nowIso()
@@ -1209,17 +1273,18 @@ app.post('/api/cards/export', async (req, res, next) => {
       name: cardJson.name,
       source: 'manual',
       conversationId: conversation?.id || req.body.conversationId || '',
-      json: path.basename(jsonPath),
-      markdown: path.basename(mdPath),
+      json: removedSidecars.includes(path.basename(jsonPath)) ? '' : path.basename(jsonPath),
+      markdown: removedSidecars.includes(path.basename(mdPath)) ? '' : path.basename(mdPath),
       png: pngPath ? path.basename(pngPath) : '',
       validation: cardValidation
     });
     res.json({
       ok: true,
       name: cardJson.name,
-      json: `/api/workspaces/file?name=${encodeURIComponent(path.basename(jsonPath))}`,
-      markdown: `/api/workspaces/file?name=${encodeURIComponent(path.basename(mdPath))}`,
+      json: removedSidecars.includes(path.basename(jsonPath)) ? '' : `/api/workspaces/file?name=${encodeURIComponent(path.basename(jsonPath))}`,
+      markdown: removedSidecars.includes(path.basename(mdPath)) ? '' : `/api/workspaces/file?name=${encodeURIComponent(path.basename(mdPath))}`,
       png: pngPath ? `/api/workspaces/file?name=${encodeURIComponent(path.basename(pngPath))}` : null,
+      removedSidecars,
       workspace: workspace.name,
       preview: { ...previewFromMarkdown(markdown), validation: cardValidation },
       validation: cardValidation
@@ -1318,6 +1383,16 @@ app.put('/api/workspaces/current', async (req, res, next) => {
 app.get('/api/workspaces/files', async (req, res, next) => {
   try {
     res.json({ files: await listWorkspaceFiles(store.data.settings) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete('/api/workspaces/non-png', async (req, res, next) => {
+  try {
+    const result = await removeNonPngWorkspaceFiles(store.data.settings);
+    await removeWorkspaceIndexSidecars(store.data.settings, result.removed);
+    res.json({ ok: true, ...result, files: await listWorkspaceFiles(store.data.settings), index: await readWorkspaceIndex(store.data.settings) });
   } catch (error) {
     next(error);
   }

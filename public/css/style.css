@@ -362,6 +362,11 @@ a:hover {
   background: var(--danger);
 }
 
+.danger-text {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 36%, var(--line));
+}
+
 .ghost-button:hover,
 .tab-button:hover,
 .icon-button:hover,

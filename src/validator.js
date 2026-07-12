@@ -73,6 +73,9 @@ export function validationRepairPrompt(markdown, validation) {
   return [
     '请只修复下面 SillyTavern 角色卡 Markdown 的格式问题，保持原角色设定、文风、情节不变。',
     '必须输出完整 Markdown 角色卡，不要解释。',
+    '标准一级章节顺序：# 名称、# 描述、# 性格、# 场景、# 开场白、# 作者备注、# 标签、# 绘图标签、# 示例对话、# 系统提示词、# 备用开场白。',
+    '缺失的必需章节要补全；已有内容要尽量原样保留，只做格式补齐和轻量衔接。',
+    '# 描述 优先修成 ```yaml 代码块；# 绘图标签 使用 Danbooru 英文 tag，用下划线连接多词。',
     '需要修复的问题：',
     JSON.stringify(validation.issues, null, 2),
     '原 Markdown：',
