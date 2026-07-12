@@ -98,6 +98,7 @@
               </label>
               <label>Count<input id="queueCount" type="number" min="1" max="20" value="3"></label>
               <label class="toggle"><input id="queueAutoExport" type="checkbox" checked>Auto export into current workspace</label>
+              <label class="toggle"><input id="queueReviewBeforeRun" type="checkbox" checked>Review outline drafts before writing</label>
               <label>Task brief<textarea id="queueSeedText" rows="4" placeholder="Overall direction, genre, style, or batch requirements"></textarea></label>
               <label>Direct items<textarea id="queueItemsText" rows="7" placeholder="Direct mode: one card per line. Outline mode can leave this empty."></textarea></label>
               <div class="button-row">
@@ -178,6 +179,7 @@
             <button id="refreshFilesBtn" class="ghost-button">刷新</button>
           </div>
           <div class="file-root-line"><span id="workspaceRootLine"></span></div>
+          <div id="cardIndexList" class="card-index-list"></div>
           <div id="fileList" class="file-list"></div>
         </section>
 

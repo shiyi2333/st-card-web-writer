@@ -1,13 +1,15 @@
 import { EventEmitter } from 'node:events';
 
 export const QUEUE_MODES = new Set(['direct', 'outline']);
+const ACTIVE_TASK_STATUSES = new Set(['queued', 'paused', 'running', 'draft_ready']);
+const RUNNABLE_TASK_STATUSES = new Set(['queued', 'paused', 'running']);
 
 export function normalizeQueueMode(value) {
   return QUEUE_MODES.has(value) ? value : 'direct';
 }
 
 export class CardQueue extends EventEmitter {
-  constructor({ id, now, store, chatText, exportCard, makeConversation }) {
+  constructor({ id, now, store, chatText, exportCard, makeConversation, validateCard, repairPrompt }) {
     super();
     this.id = id;
     this.now = now;
@@ -15,6 +17,8 @@ export class CardQueue extends EventEmitter {
     this.chatText = chatText;
     this.exportCard = exportCard;
     this.makeConversation = makeConversation;
+    this.validateCard = validateCard;
+    this.repairPrompt = repairPrompt;
     this.running = false;
     this.paused = false;
     this.cancelled = false;
@@ -45,6 +49,7 @@ export class CardQueue extends EventEmitter {
       itemsText: String(input.itemsText || '').trim(),
       count,
       autoExport: input.autoExport !== false,
+      reviewBeforeRun: input.reviewBeforeRun !== false,
       status: 'queued',
       activeIndex: -1,
       createdAt: now,
@@ -75,12 +80,13 @@ export class CardQueue extends EventEmitter {
       markdown: '',
       conversationId: '',
       exportResult: null,
+      validation: null,
       error: ''
     };
   }
 
   async updateTask(taskId, patch = {}) {
-    const allowed = new Set(['title', 'seedText', 'itemsText', 'count', 'autoExport']);
+    const allowed = new Set(['title', 'seedText', 'itemsText', 'count', 'autoExport', 'reviewBeforeRun']);
     await this.store.mutate((data) => {
       const task = (data.cardQueue?.tasks || []).find((item) => item.id === taskId);
       if (!task) return;
@@ -117,8 +123,21 @@ export class CardQueue extends EventEmitter {
 
   async resume(taskId = '') {
     this.paused = false;
+    await this.releaseDraft(taskId);
     if (!this.running) this.currentPromise = this.run(taskId);
     return this.currentPromise;
+  }
+
+  async releaseDraft(taskId = '') {
+    await this.store.mutate((data) => {
+      for (const task of data.cardQueue?.tasks || []) {
+        if (taskId && task.id !== taskId) continue;
+        if (task.status !== 'draft_ready') continue;
+        task.status = 'queued';
+        task.updatedAt = this.now();
+      }
+    });
+    this.emit('change');
   }
 
   async cancel(taskId = '') {
@@ -126,7 +145,7 @@ export class CardQueue extends EventEmitter {
     await this.store.mutate((data) => {
       for (const task of data.cardQueue?.tasks || []) {
         if (taskId && task.id !== taskId) continue;
-        if (['queued', 'running', 'paused'].includes(task.status)) {
+        if (ACTIVE_TASK_STATUSES.has(task.status)) {
           task.status = 'cancelled';
           task.updatedAt = this.now();
         }
@@ -152,6 +171,7 @@ export class CardQueue extends EventEmitter {
         if (['failed', 'cancelled'].includes(item.status)) {
           item.status = 'queued';
           item.error = '';
+          item.validation = null;
           item.updatedAt = task.updatedAt;
         }
       }
@@ -197,16 +217,21 @@ export class CardQueue extends EventEmitter {
     return tasks
       .slice()
       .reverse()
-      .find((task) => (!taskId || task.id === taskId) && ['queued', 'paused', 'running'].includes(task.status));
+      .find((task) => (!taskId || task.id === taskId) && RUNNABLE_TASK_STATUSES.has(task.status));
   }
 
   async runTask(taskId) {
-    await this.setTaskStatus(taskId, 'running');
     const task = this.task(taskId);
     if (!task) return;
     if (task.mode === 'outline' && !task.items.length) {
       await this.expandOutlineTask(taskId);
+      const expanded = this.task(taskId);
+      if (expanded?.reviewBeforeRun !== false) {
+        await this.setTaskStatus(taskId, 'draft_ready');
+        return;
+      }
     }
+    await this.setTaskStatus(taskId, 'running');
     while (!this.paused && !this.cancelled) {
       const current = this.task(taskId);
       const nextIndex = current?.items?.findIndex((item) => item.status === 'queued');
@@ -269,20 +294,31 @@ export class CardQueue extends EventEmitter {
     const item = task.items[index];
     try {
       const markdown = await this.chatText(this.cardPrompt(task, item, index));
+      let finalMarkdown = markdown;
+      let validation = this.validateCard?.(finalMarkdown) || null;
+      if (validation?.status === 'error' && this.repairPrompt) {
+        const repaired = await this.chatText(this.repairPrompt(finalMarkdown, validation));
+        const repairedValidation = this.validateCard?.(repaired) || null;
+        if (repairedValidation && repairedValidation.status !== 'error') {
+          finalMarkdown = repaired;
+          validation = repairedValidation;
+        }
+      }
       const conversationId = await this.makeConversation({
         title: item.title || `队列角色 ${index + 1}`,
         userText: item.brief,
-        assistantText: markdown
+        assistantText: finalMarkdown
       });
-      const exportResult = task.autoExport ? await this.exportCard({ markdown, conversationId }) : null;
+      const exportResult = task.autoExport ? await this.exportCard({ markdown: finalMarkdown, conversationId, taskId, itemId: item.id, validation }) : null;
       await this.store.mutate((data) => {
         const current = (data.cardQueue?.tasks || []).find((entry) => entry.id === taskId);
         const currentItem = current?.items?.[index];
         if (!currentItem) return;
         currentItem.status = 'done';
-        currentItem.markdown = markdown;
+        currentItem.markdown = finalMarkdown;
         currentItem.conversationId = conversationId;
         currentItem.exportResult = exportResult;
+        currentItem.validation = validation;
         currentItem.error = '';
         currentItem.updatedAt = current.updatedAt = this.now();
       });

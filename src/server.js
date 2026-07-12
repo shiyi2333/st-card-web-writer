@@ -26,6 +26,8 @@ import { tavilySearch } from './search.js';
 import { searchDanbooru } from './danbooru.js';
 import { listSkillFileTree, readSkillCatalog, readSkillFile, saveSkillFile } from './skills.js';
 import { CardQueue } from './queue.js';
+import { validateCardMarkdown, validationRepairPrompt } from './validator.js';
+import { readWorkspaceIndex, recordWorkspaceCard } from './workspace-index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -240,13 +242,14 @@ async function makeQueueConversation({ title, userText, assistantText }) {
   return conversation.id;
 }
 
-async function exportCardFromMarkdown({ markdown, conversationId }) {
+async function exportCardFromMarkdown({ markdown, conversationId, taskId = '', itemId = '', validation = null }) {
   if (!markdown) {
     const error = new Error('没有可导出的角色卡 Markdown');
     error.status = 400;
     throw error;
   }
   const conversation = findConversation(conversationId);
+  const cardValidation = validation || validateCardMarkdown(markdown);
   const cardJson = makeCardJson(markdown);
   const safeName = safeFileName(cardJson.name, 'character');
   const stamp = Date.now();
@@ -261,8 +264,20 @@ async function exportCardFromMarkdown({ markdown, conversationId }) {
     workspace: workspace.name,
     json: `/api/workspaces/file?name=${encodeURIComponent(path.basename(jsonPath))}`,
     markdown: `/api/workspaces/file?name=${encodeURIComponent(path.basename(mdPath))}`,
-    preview: previewFromMarkdown(markdown)
+    preview: { ...previewFromMarkdown(markdown), validation: cardValidation },
+    validation: cardValidation
   };
+  await recordWorkspaceCard(store.data.settings, {
+    id: `${safeName}_${stamp}`,
+    name: cardJson.name,
+    source: 'queue',
+    taskId,
+    itemId,
+    conversationId,
+    json: path.basename(jsonPath),
+    markdown: path.basename(mdPath),
+    validation: cardValidation
+  });
   if (conversation) {
     await appendToolMessage(conversation, {
       action: 'export-card',
@@ -285,7 +300,9 @@ const cardQueue = new CardQueue({
   store,
   chatText: chatTextForQueue,
   exportCard: exportCardFromMarkdown,
-  makeConversation: makeQueueConversation
+  makeConversation: makeQueueConversation,
+  validateCard: validateCardMarkdown,
+  repairPrompt: validationRepairPrompt
 });
 
 async function appendToolMessage(conversation, tool) {
@@ -430,7 +447,7 @@ async function planSkillActions({ model, conversation, userText, section, select
             '如果用户需要某个纯提示词风格 skill，可以只返回 skills，不需要虚构 action。',
             '写卡、改卡、作者备注、开场白、ST/SillyTavern 相关请求应优先选择 character-card-writer 和 st-card-style-guide；成人肉感/安产型文风请求可选择 openclaw-erotic-style。',
             '不要执行删除、移动等危险文件操作。',
-            `可用 skills：${JSON.stringify(skills.map(({ id, name, description, actions }) => ({ id, name, description, actions })))}`
+            `可用 skills：${JSON.stringify(skills.map(({ id, name, description, actions, triggers, inputs, outputs, requiresConfirmation }) => ({ id, name, description, actions, triggers, inputs, outputs, requiresConfirmation })))}`
           ].join('\n')
         },
         {
@@ -491,6 +508,24 @@ app.get('/api/device-paths', (req, res) => {
 app.get('/api/skills', (req, res) => {
   readSkillCatalog({ refresh: req.query.refresh === '1' })
     .then((skills) => res.json({ skills }))
+    .catch((error) => res.status(500).json({ error: error.message }));
+});
+
+app.get('/api/skills/manifest', (req, res) => {
+  readSkillCatalog({ refresh: req.query.refresh === '1' })
+    .then((skills) => res.json({
+      skills: skills.map((skill) => ({
+        id: skill.id,
+        name: skill.name,
+        category: skill.category,
+        description: skill.description,
+        actions: skill.actions || [],
+        triggers: skill.triggers || [],
+        inputs: skill.inputs || [],
+        outputs: skill.outputs || [],
+        requiresConfirmation: Boolean(skill.requiresConfirmation)
+      }))
+    }))
     .catch((error) => res.status(500).json({ error: error.message }));
 });
 
@@ -995,7 +1030,13 @@ app.post('/api/queue/retry', async (req, res, next) => {
 app.post('/api/cards/preview', (req, res) => {
   const conversation = findConversation(req.body.conversationId);
   const markdown = req.body.markdown || latestAssistantMarkdown(conversation, req.body.messageId);
-  res.json(previewFromMarkdown(markdown));
+  res.json({ ...previewFromMarkdown(markdown), validation: validateCardMarkdown(markdown) });
+});
+
+app.post('/api/cards/validate', (req, res) => {
+  const conversation = findConversation(req.body.conversationId);
+  const markdown = req.body.markdown || latestAssistantMarkdown(conversation, req.body.messageId);
+  res.json(validateCardMarkdown(markdown));
 });
 
 app.post('/api/cards/export', async (req, res, next) => {
@@ -1003,6 +1044,7 @@ app.post('/api/cards/export', async (req, res, next) => {
     const conversation = findConversation(req.body.conversationId);
     const markdown = req.body.markdown || latestAssistantMarkdown(conversation, req.body.messageId);
     if (!markdown) return res.status(400).json({ error: '没有可导出的角色卡 Markdown' });
+    const cardValidation = validateCardMarkdown(markdown);
     const cardJson = makeCardJson(markdown, { name: req.body.name, world: req.body.world, selectedImage: req.body.selectedImage || null });
     const safeName = safeFileName(cardJson.name, 'character');
     const stamp = Date.now();
@@ -1036,6 +1078,16 @@ app.post('/api/cards/export', async (req, res, next) => {
         createdAt: nowIso()
       });
     }
+    await recordWorkspaceCard(store.data.settings, {
+      id: `${safeName}_${stamp}`,
+      name: cardJson.name,
+      source: 'manual',
+      conversationId: conversation?.id || req.body.conversationId || '',
+      json: path.basename(jsonPath),
+      markdown: path.basename(mdPath),
+      png: pngPath ? path.basename(pngPath) : '',
+      validation: cardValidation
+    });
     res.json({
       ok: true,
       name: cardJson.name,
@@ -1043,7 +1095,8 @@ app.post('/api/cards/export', async (req, res, next) => {
       markdown: `/api/workspaces/file?name=${encodeURIComponent(path.basename(mdPath))}`,
       png: pngPath ? `/api/workspaces/file?name=${encodeURIComponent(path.basename(pngPath))}` : null,
       workspace: workspace.name,
-      preview: previewFromMarkdown(markdown)
+      preview: { ...previewFromMarkdown(markdown), validation: cardValidation },
+      validation: cardValidation
     });
   } catch (error) {
     next(error);
@@ -1054,6 +1107,14 @@ app.get('/api/workspaces', async (req, res, next) => {
   try {
     const names = await listWorkspaces(store.data.settings);
     res.json({ root: workspaceRoot(store.data.settings), current: store.data.settings.currentWorkspace, workspaces: names });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/workspaces/index', async (req, res, next) => {
+  try {
+    res.json(await readWorkspaceIndex(store.data.settings));
   } catch (error) {
     next(error);
   }

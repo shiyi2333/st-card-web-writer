@@ -36,6 +36,7 @@ const state = {
   avatarDataUrl: '',
   workspaces: [],
   files: [],
+  workspaceIndex: { cards: [] },
   lastUserText: '',
   skills: [],
   selectedSkills: [],
@@ -775,6 +776,19 @@ function renderPreview() {
     pill.innerHTML = `<b>${escapeHtml(label)}</b>${escapeHtml(value)}`;
     stats.appendChild(pill);
   });
+  const validation = state.preview.validation;
+  if (validation) {
+    const pill = document.createElement('span');
+    pill.className = `stat-pill validation-${escapeHtml(validation.status)}`;
+    pill.innerHTML = `<b>Check</b>${escapeHtml(validation.status || 'ok')} / ${validation.issues?.length || 0}`;
+    stats.appendChild(pill);
+    if (validation.issues?.length) {
+      const note = document.createElement('span');
+      note.className = 'validation-note';
+      note.textContent = validation.issues.slice(0, 3).map((item) => `${item.severity}: ${item.message}`).join(' | ');
+      stats.appendChild(note);
+    }
+  }
 
   CARD_SECTIONS.forEach((name) => {
     const value = state.preview.sections[name];
@@ -1011,13 +1025,18 @@ async function switchWorkspace() {
 }
 
 async function loadFiles() {
-  const payload = await api('/api/workspaces/files');
+  const [payload, indexPayload] = await Promise.all([
+    api('/api/workspaces/files'),
+    api('/api/workspaces/index').catch(() => ({ cards: [] }))
+  ]);
   state.files = payload.files || [];
+  state.workspaceIndex = indexPayload || { cards: [] };
   renderFiles();
 }
 
 function renderFiles() {
   const list = $('#fileList');
+  renderCardIndex();
   list.innerHTML = '';
   if (!state.files.length) {
     list.innerHTML = '<div class="empty-state">当前工作区还没有文件。</div>';
@@ -1041,6 +1060,32 @@ function renderFiles() {
     item.querySelector('[data-action="delete"]')?.addEventListener('click', () => deleteFile(file.name));
     list.appendChild(item);
   });
+}
+
+function renderCardIndex() {
+  const list = $('#cardIndexList');
+  if (!list) return;
+  const cards = state.workspaceIndex?.cards || [];
+  if (!cards.length) {
+    list.innerHTML = '';
+    return;
+  }
+  list.innerHTML = cards.slice(0, 18).map((card) => {
+    const links = [
+      card.markdown ? `<a class="mini-link" href="/api/workspaces/file?name=${encodeURIComponent(card.markdown)}" target="_blank">Markdown</a>` : '',
+      card.json ? `<a class="mini-link" href="/api/workspaces/file?name=${encodeURIComponent(card.json)}" target="_blank">JSON</a>` : '',
+      card.png ? `<a class="mini-link" href="/api/workspaces/file?name=${encodeURIComponent(card.png)}" target="_blank">PNG</a>` : ''
+    ].filter(Boolean).join('');
+    return `
+      <article class="card-index-item">
+        <div>
+          <strong>${escapeHtml(card.name)}</strong>
+          <p>${escapeHtml(card.source || 'manual')} / ${escapeHtml(card.validationStatus || 'unchecked')} / ${formatDate(card.updatedAt)}</p>
+        </div>
+        <div class="button-row">${links}</div>
+      </article>
+    `;
+  }).join('');
 }
 
 async function renameFile(name) {
@@ -1411,6 +1456,7 @@ async function loadQueue() {
 }
 
 function queueStatusName(status) {
+  if (status === 'draft_ready') return '草稿待确认';
   return {
     queued: '等待中',
     running: '生成中',
@@ -1432,6 +1478,14 @@ function queueItemLinks(item) {
     links.push(`<button class="mini-button" data-action="retry-item" data-item="${escapeHtml(item.id)}">重试</button>`);
   }
   return links.join('');
+}
+
+function queueValidationLine(validation) {
+  if (!validation) return '';
+  const issues = validation.issues || [];
+  const label = validation.status === 'ok' ? 'Check ok' : `Check ${validation.status}: ${issues.length}`;
+  const detail = issues.slice(0, 2).map((item) => item.message).join(' | ');
+  return `<p class="validation-line ${escapeHtml(validation.status)}">${escapeHtml(label)}${detail ? ` / ${escapeHtml(detail)}` : ''}</p>`;
 }
 
 function renderQueue() {
@@ -1470,6 +1524,7 @@ function renderQueue() {
                 <strong>${index + 1}. ${escapeHtml(item.title || item.brief || '未命名角色')}</strong>
                 <p>${escapeHtml(item.brief || '')}</p>
                 ${item.error ? `<p class="inline-error">${escapeHtml(item.error)}</p>` : ''}
+                ${queueValidationLine(item.validation || item.exportResult?.validation)}
               </div>
               <div class="queue-item-actions">
                 <span class="mode-pill">${queueStatusName(item.status)}</span>
@@ -1506,6 +1561,7 @@ async function createQueueTask(event) {
     mode: $('#queueMode').value,
     count: Number($('#queueCount').value || 1),
     autoExport: $('#queueAutoExport').checked,
+    reviewBeforeRun: $('#queueReviewBeforeRun')?.checked !== false,
     seedText: $('#queueSeedText').value.trim(),
     itemsText: $('#queueItemsText').value.trim()
   };

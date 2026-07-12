@@ -107,6 +107,49 @@
   color: var(--danger);
 }
 
+.queue-task.draft_ready {
+  border-color: var(--warm);
+}
+
+.validation-note,
+.validation-line {
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.validation-line.error,
+.validation-error {
+  color: var(--danger);
+}
+
+.validation-line.warn,
+.validation-warn {
+  color: var(--warm);
+}
+
+.card-index-list {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0 14px;
+}
+
+.card-index-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.card-index-item p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
 @media (max-width: 860px) {
   .queue-layout {
     grid-template-columns: 1fr;

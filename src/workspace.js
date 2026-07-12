@@ -74,6 +74,7 @@ export async function listWorkspaceFiles(settings = {}) {
   const entries = await fs.readdir(workspace.dir, { withFileTypes: true });
   const files = [];
   for (const entry of entries) {
+    if (entry.name === '.st-card-index.json') continue;
     const fullPath = path.join(workspace.dir, entry.name);
     const stat = await fs.stat(fullPath);
     files.push({

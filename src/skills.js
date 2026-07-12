@@ -166,14 +166,20 @@ function parseFrontmatter(markdown = '') {
 }
 
 function normalizeSkill(input = {}) {
+  const list = (value) => Array.isArray(value)
+    ? value.map(String).map((item) => item.trim()).filter(Boolean)
+    : [];
   return {
     id: String(input.id || '').trim(),
     name: String(input.name || input.id || '').trim(),
     category: String(input.category || '通用').trim(),
     description: String(input.description || '').trim(),
-    actions: Array.isArray(input.actions)
-      ? input.actions.map(String).map((item) => item.trim()).filter(Boolean)
-      : [],
+    actions: list(input.actions),
+    triggers: list(input.triggers),
+    inputs: list(input.inputs),
+    outputs: list(input.outputs),
+    requiresConfirmation: input.requiresConfirmation === true || input.requiresConfirmation === 'true',
+    manifest: input.manifest || null,
     prompt: String(input.prompt || '').trim()
   };
 }
@@ -209,6 +215,10 @@ export function skillCatalogPrompt(skills = DEFAULT_SKILLS) {
       `## ${skill.name} (${skill.id})`,
       `category: ${skill.category}`,
       `actions: ${(skill.actions || []).join(', ') || 'none'}`,
+      `triggers: ${(skill.triggers || []).join(', ') || 'none'}`,
+      `inputs: ${(skill.inputs || []).join(', ') || 'free text'}`,
+      `outputs: ${(skill.outputs || []).join(', ') || 'assistant text'}`,
+      `requiresConfirmation: ${skill.requiresConfirmation ? 'true' : 'false'}`,
       `description: ${skill.description}`,
       '',
       skill.prompt
