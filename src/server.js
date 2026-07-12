@@ -329,6 +329,8 @@ function toolSummary(action, result) {
   if (action === 'web-search') return `网页搜索完成：${result.results?.length || 0} 条结果`;
   if (action === 'image-search') return `Danbooru 搜图完成：${result.results?.length || 0} 张候选`;
   if (action === 'export-card') return '角色卡导出数据已准备';
+  if (action === 'queue-create-task') return `已创建 ${result.tasks?.length || 0} 个写卡队列任务`;
+  if (action === 'ask-user') return result.title || '需要你先确认几个选项';
   if (action === 'workspace-write') return `已写入文件：${result.path || ''}`;
   if (action === 'card-section-rewrite') return '已进入单区块重写模式';
   return `工具已完成: ${action}`;
@@ -339,16 +341,85 @@ function toolMethod(action) {
     'web-search': 'tavilySearch',
     'image-search': 'searchDanbooru',
     'export-card': 'makeCardJson + previewFromMarkdown',
+    'queue-create-task': 'CardQueue.createTask',
+    'ask-user': 'agentQuestionnaire',
     'workspace-write': 'writeWorkspaceArtifact',
     'card-section-rewrite': 'sectionTargeting',
     'skill-prompt': 'skillPromptInjection'
   }[action] || 'agentAction';
 }
 
+function countFromText(text = '', fallback = 3) {
+  const match = String(text).match(/(\d{1,2})\s*(张|个|份|cards?|roles?|角色)?/i);
+  return Math.max(1, Math.min(Number(match?.[1]) || fallback, 20));
+}
+
+function normalizeQueueTaskInput(input = {}, userText = '') {
+  const mode = input.mode === 'direct' ? 'direct' : 'outline';
+  const count = Math.max(1, Math.min(Number(input.count) || countFromText(userText), 20));
+  const seedText = String(input.seedText || input.brief || input.prompt || userText || '').trim();
+  const itemsText = Array.isArray(input.items)
+    ? input.items.map((item) => typeof item === 'string' ? item : [item.title, item.brief].filter(Boolean).join(': ')).filter(Boolean).join('\n')
+    : String(input.itemsText || '').trim();
+  return {
+    title: String(input.title || '').trim() || (mode === 'outline' ? 'AI 批次设定任务' : 'AI 多卡生成任务'),
+    mode,
+    count,
+    seedText,
+    itemsText,
+    autoExport: input.autoExport !== false,
+    reviewBeforeRun: input.reviewBeforeRun !== false
+  };
+}
+
+function normalizeQuestionnaireInput(input = {}, userText = '') {
+  const rawQuestions = Array.isArray(input.questions) ? input.questions : [];
+  const questions = rawQuestions.slice(0, 6).map((question, index) => {
+    let type = ['choice', 'text', 'textarea', 'number'].includes(question.type) ? question.type : 'choice';
+    const options = Array.isArray(question.options)
+      ? question.options.slice(0, 8).map((option) => String(option.label || option.value || option).trim()).filter(Boolean)
+      : [];
+    if (type === 'choice' && !options.length) type = 'textarea';
+    return {
+      id: String(question.id || `q${index + 1}`).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32) || `q${index + 1}`,
+      label: String(question.label || question.question || `问题 ${index + 1}`).trim(),
+      type,
+      required: question.required !== false,
+      placeholder: String(question.placeholder || '').trim(),
+      options
+    };
+  }).filter((question) => question.label);
+  return {
+    id: id('questionnaire'),
+    title: String(input.title || '需要你先确认一下').trim(),
+    intro: String(input.intro || input.description || userText || '').trim(),
+    questions: questions.length ? questions : [
+      {
+        id: 'direction',
+        label: '你希望这批角色卡优先走哪种方向？',
+        type: 'textarea',
+        required: true,
+        placeholder: '例如：校园、都市、奇幻、偏日常、偏剧情推进',
+        options: []
+      }
+    ],
+    submitLabel: String(input.submitLabel || '提交并继续').trim(),
+    followupPrefix: String(input.followupPrefix || '请根据下面的问卷答案继续处理：').trim()
+  };
+}
+
 function normalizeActionInput(action, input = {}, userText = '') {
   if (action === 'web-search') return { query: input.query || userText, maxResults: input.maxResults || 5 };
   if (action === 'image-search') return { tags: input.tags || userText, limit: input.limit || store.data.settings.imageResultCount || 10, page: input.page || 1 };
   if (action === 'export-card') return { messageId: input.messageId || '', markdown: input.markdown || '', selectedImage: input.selectedImage || null };
+  if (action === 'queue-create-task') {
+    const rawTasks = Array.isArray(input.tasks) && input.tasks.length ? input.tasks : [input];
+    return {
+      tasks: rawTasks.slice(0, 6).map((task) => normalizeQueueTaskInput(task, userText)),
+      start: Boolean(input.start || input.run)
+    };
+  }
+  if (action === 'ask-user') return normalizeQuestionnaireInput(input, userText);
   if (action === 'workspace-write') return { fileName: input.fileName || '', content: input.content || '', temp: Boolean(input.temp) };
   if (action === 'card-section-rewrite') return { section: input.section || '', instruction: input.instruction || userText };
   return input;
@@ -375,6 +446,19 @@ async function executeAgentAction(action, input, conversation, emit = null) {
     const markdown = input.markdown || latestAssistantMarkdown(conversation, input.messageId);
     const cardJson = makeCardJson(markdown, { selectedImage: input.selectedImage || null });
     result = { preview: previewFromMarkdown(markdown), cardJson };
+  } else if (action === 'queue-create-task') {
+    emit?.('skill_progress', { action, message: `创建 ${input.tasks?.length || 0} 个写卡队列任务` });
+    const tasks = [];
+    for (const taskInput of input.tasks || []) {
+      const task = await cardQueue.createTask(taskInput);
+      tasks.push(task);
+    }
+    if (input.start) {
+      cardQueue.resume().catch((error) => console.error('queue run failed:', error));
+    }
+    result = { tasks, queue: cardQueue.snapshot(), started: Boolean(input.start) };
+  } else if (action === 'ask-user') {
+    result = input;
   } else if (action === 'workspace-write') {
     requireBody({ body: input }, ['fileName', 'content']);
     emit?.('skill_progress', { action, message: `写入工作区文件：${input.fileName}` });
@@ -413,6 +497,20 @@ function fallbackPlanFromText(text = '', selectedSkills = []) {
   if (selected.has('export-card') || /导出|png|json|落盘/.test(lower)) {
     actions.push({ action: 'export-card', input: {}, reason: '用户需要导出角色卡' });
   }
+  if (selected.has('batch-card-planner') || (/(队列|批次|多张|多个角色|一批|batch|queue)/i.test(text) && /(生成|创建|设置|安排|做|写|列举|建议)/.test(text))) {
+    actions.push({
+      action: 'queue-create-task',
+      input: {
+        title: 'AI 批次写卡任务',
+        mode: /直接|逐条|每行/.test(text) ? 'direct' : 'outline',
+        count: countFromText(text, 3),
+        seedText: text,
+        autoExport: true,
+        reviewBeforeRun: true
+      },
+      reason: '用户需要创建多角色卡队列'
+    });
+  }
   return actions.slice(0, 3);
 }
 
@@ -423,6 +521,11 @@ function fallbackSkillIdsFromText(text = '', selectedSkills = []) {
     ids.add('character-card-writer');
     ids.add('st-card-style-guide');
   }
+  if (/(队列|批次|多张|多个角色|一批|batch|queue)/i.test(text)) {
+    ids.add('batch-card-planner');
+    ids.add('character-card-writer');
+    ids.add('st-card-style-guide');
+  }
   if (/肉感|安产|成人文风|色情文风|情色文风|openclaw|肥尻|宽胯|巨乳/.test(value)) {
     ids.add('openclaw-erotic-style');
   }
@@ -430,7 +533,7 @@ function fallbackSkillIdsFromText(text = '', selectedSkills = []) {
 }
 
 async function planSkillActions({ model, conversation, userText, section, selectedSkills, skills }) {
-  const allowedActions = new Set(['web-search', 'image-search', 'export-card', 'workspace-write', 'card-section-rewrite']);
+  const allowedActions = new Set(['web-search', 'image-search', 'export-card', 'workspace-write', 'card-section-rewrite', 'queue-create-task', 'ask-user']);
   const allowedSkills = new Set((skills || []).map((skill) => skill.id));
   const selected = Array.isArray(selectedSkills) ? selectedSkills : [];
   try {
@@ -442,8 +545,11 @@ async function planSkillActions({ model, conversation, userText, section, select
           role: 'system',
           content: [
             '你是 skill planner。只输出 JSON，不要解释。',
-            'JSON 格式：{"skills":["skill-id"],"actions":[{"action":"web-search|image-search|export-card|workspace-write|card-section-rewrite","input":{},"reason":"简短原因"}]}',
+            'JSON 格式：{"skills":["skill-id"],"actions":[{"action":"web-search|image-search|export-card|workspace-write|card-section-rewrite|queue-create-task|ask-user","input":{},"reason":"简短原因"}]}',
             '只有用户明确需要工具时才返回 action；普通聊天返回 {"actions":[]}.',
+            '当用户要求批量写卡、创建多张角色卡、先列设定再逐张完善时，可以使用 queue-create-task。input 可以是单个任务，也可以是 {"tasks":[...]}；mode 为 outline 或 direct；默认 reviewBeforeRun=true。',
+            '当写卡方向、数量、题材、尺度、导出方式等信息不足且继续执行会偏离用户习惯时，可以使用 ask-user 创建前端问卷。问卷问题应简洁，最多 6 个。',
+            'queue-create-task 默认只创建队列；除非用户明确说立刻开始/直接跑，否则不要设置 start=true。',
             '如果用户需要某个纯提示词风格 skill，可以只返回 skills，不需要虚构 action。',
             '写卡、改卡、作者备注、开场白、ST/SillyTavern 相关请求应优先选择 character-card-writer 和 st-card-style-guide；成人肉感/安产型文风请求可选择 openclaw-erotic-style。',
             '不要执行删除、移动等危险文件操作。',
@@ -901,6 +1007,26 @@ app.post('/api/chat', async (req, res, next) => {
         toolResults.push(packed);
         sse(res, 'skill_error', { toolId, action: planned.action, error: error.message, toolMessage });
       }
+    }
+
+    if (toolResults.some((item) => item.action === 'ask-user' && item.result?.questions?.length)) {
+      const assistantMessage = {
+        id: id('msg'),
+        role: 'assistant',
+        content: '我先把需要确认的选项列出来了。你填完后，我会按你的选择继续组装任务或写卡。',
+        section: req.body.section || '',
+        createdAt: nowIso(),
+        editHistory: [],
+        tools: []
+      };
+      await store.mutate(() => {
+        conversation.messages.push(assistantMessage);
+        conversation.updatedAt = nowIso();
+      });
+      res.write(`data: ${JSON.stringify({ done: true, message: assistantMessage })}\n\n`);
+      res.write('data: [DONE]\n\n');
+      res.end();
+      return;
     }
 
     const messages = buildMessages({

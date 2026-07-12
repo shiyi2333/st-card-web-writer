@@ -475,6 +475,32 @@ function messageRoleName(role) {
   return { user: '用户', assistant: '助手', tool: '工具' }[role] || role;
 }
 
+function questionnaireHtml(tool = {}) {
+  const result = tool.result || {};
+  const questions = result.questions || [];
+  return `
+    <form class="questionnaire-form" data-questionnaire-form data-prefix="${escapeHtml(result.followupPrefix || '')}">
+      ${result.intro ? `<p class="muted-line">${escapeHtml(result.intro)}</p>` : ''}
+      ${questions.map((question) => `
+        <label class="questionnaire-field">
+          <span>${escapeHtml(question.label)}</span>
+          ${question.type === 'textarea'
+            ? `<textarea data-question-id="${escapeHtml(question.id)}" data-question-label="${escapeHtml(question.label)}" ${question.required ? 'required' : ''} placeholder="${escapeHtml(question.placeholder || '')}" rows="3"></textarea>`
+            : question.type === 'text' || question.type === 'number'
+              ? `<input type="${question.type === 'number' ? 'number' : 'text'}" data-question-id="${escapeHtml(question.id)}" data-question-label="${escapeHtml(question.label)}" ${question.required ? 'required' : ''} placeholder="${escapeHtml(question.placeholder || '')}">`
+              : `<select data-question-id="${escapeHtml(question.id)}" data-question-label="${escapeHtml(question.label)}" ${question.required ? 'required' : ''}>
+                  <option value="">请选择</option>
+                  ${(question.options || []).map((option) => `<option value="${escapeHtml(option)}">${escapeHtml(option)}</option>`).join('')}
+                </select>`}
+        </label>
+      `).join('')}
+      <div class="button-row">
+        <button class="primary-button" type="submit">${escapeHtml(result.submitLabel || '提交并继续')}</button>
+      </div>
+    </form>
+  `;
+}
+
 function toolResultHtml(tool = {}) {
   const meta = `
     <div class="tool-meta">
@@ -501,12 +527,47 @@ function toolResultHtml(tool = {}) {
       <img src="/api/images/proxy?url=${encodeURIComponent(image.previewUrl || image.sampleUrl || image.fileUrl)}" alt="Danbooru ${escapeHtml(image.id)}">
     `).join('')}</div>`;
   }
+  if (tool.action === 'queue-create-task' && tool.result?.tasks?.length) {
+    return `${meta}<div class="tool-links">${tool.result.tasks.map((task) => `
+      <div class="tool-link-card">
+        <strong>${escapeHtml(task.title)}</strong>
+        <span>${escapeHtml(task.mode === 'outline' ? '先列设定再完善' : '直接多卡生成')} / ${escapeHtml(task.status)} / ${escapeHtml(task.count || task.items?.length || 0)} 张</span>
+      </div>
+    `).join('')}</div>`;
+  }
+  if (tool.action === 'ask-user' && tool.result?.questions?.length) {
+    return `${meta}${questionnaireHtml(tool)}`;
+  }
   return `${meta}<pre>${escapeHtml(JSON.stringify(tool.result || tool.error || {}, null, 2))}</pre>`;
 }
 
 function isNearMessageBottom(list) {
   if (!list) return true;
   return list.scrollHeight - list.scrollTop - list.clientHeight < 96;
+}
+
+function wireQuestionnaires() {
+  $$('[data-questionnaire-form]').forEach((form) => {
+    if (form.dataset.wired === '1') return;
+    form.dataset.wired = '1';
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const lines = [...form.querySelectorAll('[data-question-id]')]
+        .map((field) => {
+          const label = field.dataset.questionLabel || field.dataset.questionId;
+          const value = String(field.value || '').trim();
+          return value ? `- ${label}: ${value}` : '';
+        })
+        .filter(Boolean);
+      if (!lines.length) return toast('请先填写问卷', 'error');
+      const prefix = form.dataset.prefix || '请根据下面的问卷答案继续处理：';
+      form.querySelectorAll('input, textarea, select, button').forEach((item) => { item.disabled = true; });
+      sendMessage(`${prefix}\n${lines.join('\n')}`).catch((error) => {
+        form.querySelectorAll('input, textarea, select, button').forEach((item) => { item.disabled = false; });
+        toast(error.message, 'error');
+      });
+    });
+  });
 }
 
 function renderMessages(options = {}) {
@@ -558,6 +619,7 @@ function renderMessages(options = {}) {
     }
     list.appendChild(item);
   });
+  wireQuestionnaires();
   if (shouldStick) {
     requestAnimationFrame(() => {
       list.scrollTop = list.scrollHeight;
@@ -719,6 +781,11 @@ function handleStreamPayload(payload, tempAssistant) {
   }
   if (event === 'skill_result') {
     upsertToolMessage(payload, 'ok', payload.toolMessage?.tool?.summary || `已完成: ${payload.action}`);
+    if (payload.action === 'queue-create-task' && payload.result?.queue) {
+      state.queue = payload.result.queue;
+      renderQueue();
+      if (payload.result.started) startQueuePolling();
+    }
     return;
   }
   if (event === 'skill_error') {
