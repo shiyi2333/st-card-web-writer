@@ -1,7 +1,6 @@
-import { CARD_SECTIONS } from './prompts.js';
 import { listFromSection, parseMarkdownCard, stripFence } from './card.js';
 
-const REQUIRED_SECTIONS = CARD_SECTIONS;
+const REQUIRED_SECTIONS = ['名称', '描述', '性格', '场景', '开场白', '作者备注', '标签', '绘图标签'];
 
 function hasSection(sections, name) {
   return Object.prototype.hasOwnProperty.call(sections, name) && String(sections[name] || '').trim().length > 0;
@@ -75,7 +74,8 @@ export function validationRepairPrompt(markdown, validation) {
     '请只修复下面 SillyTavern 角色卡 Markdown 的格式问题，保持原角色设定、文风、情节不变。',
     '必须输出完整 Markdown 角色卡，不要解释。',
     '这里的“标签”指 Markdown 章节标签/一级标题，例如 # 名称、# 描述、# 性格，不是“# 标签”章节里的 ST tags。',
-    '标准一级章节标签必须全部出现，少哪个就补哪个，一个都不能漏：# 名称、# 描述、# 性格、# 场景、# 开场白、# 作者备注、# 标签、# 绘图标签、# 示例对话、# 系统提示词、# 备用开场白。',
+    '必需 Markdown 一级章节标签必须全部出现，少哪个就补哪个，一个都不能漏：# 名称、# 描述、# 性格、# 场景、# 开场白、# 作者备注、# 标签、# 绘图标签。',
+    '可选章节 # 示例对话、# 系统提示词、# 备用开场白 如果原文没有，不要为了格式修复强行补。',
     '请严格按“需要修复的问题”逐项补齐缺失的 Markdown 章节标签和该章节内容；已有内容要尽量原样保留，只做格式补齐和轻量衔接。',
     '# 描述 优先修成 ```yaml 代码块；# 绘图标签 使用 Danbooru 英文 tag，用下划线连接多词。',
     '需要修复的问题：',
