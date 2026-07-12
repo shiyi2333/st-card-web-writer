@@ -5,7 +5,7 @@ const ACTIVE_TASK_STATUSES = new Set(['queued', 'paused', 'running', 'draft_read
 const RUNNABLE_TASK_STATUSES = new Set(['queued', 'paused', 'running']);
 
 export function normalizeQueueMode(value) {
-  return QUEUE_MODES.has(value) ? value : 'direct';
+  return QUEUE_MODES.has(value) ? value : 'outline';
 }
 
 export class CardQueue extends EventEmitter {
@@ -35,28 +35,22 @@ export class CardQueue extends EventEmitter {
 
   async createTask(input = {}) {
     const now = this.now();
-    const mode = normalizeQueueMode(input.mode);
+    const mode = 'outline';
     const count = Math.max(1, Math.min(Number(input.count) || 1, 20));
-    const rawLines = String(input.itemsText || '')
-      .split(/\r?\n+/)
-      .map((line) => line.trim())
-      .filter(Boolean);
     const task = {
       id: this.id('queue'),
-      title: String(input.title || '').trim() || (mode === 'outline' ? '设定展开队列' : '多卡生成队列'),
+      title: String(input.title || '').trim() || '设定展开队列',
       mode,
       seedText: String(input.seedText || input.itemsText || '').trim(),
       itemsText: String(input.itemsText || '').trim(),
       count,
       autoExport: input.autoExport !== false,
-      reviewBeforeRun: input.reviewBeforeRun !== false,
+      reviewBeforeRun: false,
       status: 'queued',
       activeIndex: -1,
       createdAt: now,
       updatedAt: now,
-      items: mode === 'direct'
-        ? (rawLines.length ? rawLines : [String(input.seedText || '').trim() || '新角色卡']).slice(0, count).map((text, index) => this.makeItem(text, index, now))
-        : [],
+      items: [],
       logs: []
     };
     await this.store.mutate((data) => {
@@ -86,7 +80,7 @@ export class CardQueue extends EventEmitter {
   }
 
   async updateTask(taskId, patch = {}) {
-    const allowed = new Set(['title', 'seedText', 'itemsText', 'count', 'autoExport', 'reviewBeforeRun']);
+    const allowed = new Set(['title', 'seedText', 'itemsText', 'count', 'autoExport']);
     await this.store.mutate((data) => {
       const task = (data.cardQueue?.tasks || []).find((item) => item.id === taskId);
       if (!task) return;
@@ -226,7 +220,7 @@ export class CardQueue extends EventEmitter {
     if (task.mode === 'outline' && !task.items.length) {
       await this.expandOutlineTask(taskId);
       const expanded = this.task(taskId);
-      if (expanded?.reviewBeforeRun !== false) {
+      if (expanded?.reviewBeforeRun === true) {
         await this.setTaskStatus(taskId, 'draft_ready');
         return;
       }

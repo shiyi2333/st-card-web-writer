@@ -90,17 +90,9 @@
           <div class="queue-layout">
             <form id="queueForm" class="form-card queue-form">
               <label>Task name<input id="queueTitle" placeholder="Weekly card pack"></label>
-              <label>Mode
-                <select id="queueMode">
-                  <option value="direct">Direct multi-card</option>
-                  <option value="outline">Draft brief ideas first</option>
-                </select>
-              </label>
-              <label>Count<input id="queueCount" type="number" min="1" max="20" value="3"></label>
+              <label>Count<input id="queueCount" type="number" min="1" max="20" value="5"></label>
               <label class="toggle"><input id="queueAutoExport" type="checkbox" checked>Auto export into current workspace</label>
-              <label class="toggle"><input id="queueReviewBeforeRun" type="checkbox" checked>Review outline drafts before writing</label>
-              <label>Task brief<textarea id="queueSeedText" rows="4" placeholder="Overall direction, genre, style, or batch requirements"></textarea></label>
-              <label>Direct items<textarea id="queueItemsText" rows="7" placeholder="Direct mode: one card per line. Outline mode can leave this empty."></textarea></label>
+              <label>Batch direction<textarea id="queueSeedText" rows="8" placeholder="A broad type, theme, genre, relationship, or batch requirement. The queue will first draft this many simple ideas, then complete them one by one."></textarea></label>
               <div class="button-row">
                 <button id="createQueueTaskBtn" class="primary-button" type="submit">Add task</button>
                 <button id="runQueueBtn" class="ghost-button" type="button">Run / resume</button>

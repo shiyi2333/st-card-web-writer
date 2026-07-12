@@ -531,7 +531,7 @@ function toolResultHtml(tool = {}) {
     return `${meta}<div class="tool-links">${tool.result.tasks.map((task) => `
       <div class="tool-link-card">
         <strong>${escapeHtml(task.title)}</strong>
-        <span>${escapeHtml(task.mode === 'outline' ? '先列设定再完善' : '直接多卡生成')} / ${escapeHtml(task.status)} / ${escapeHtml(task.count || task.items?.length || 0)} 张</span>
+        <span>先列设定再完善 / ${escapeHtml(task.status)} / ${escapeHtml(task.count || task.items?.length || 0)} 张</span>
       </div>
     `).join('')}</div>`;
   }
@@ -1562,7 +1562,7 @@ async function loadQueue() {
 }
 
 function queueStatusName(status) {
-  if (status === 'draft_ready') return '草稿待确认';
+  if (status === 'draft_ready') return '等待继续';
   return {
     queued: '等待中',
     running: '生成中',
@@ -1617,7 +1617,7 @@ function renderQueue() {
         <div class="queue-task-head">
           <div>
             <strong>${escapeHtml(task.title)}</strong>
-            <p>${escapeHtml(task.mode === 'outline' ? '先列设定再完善' : '直接多卡生成')} / ${queueStatusName(task.status)} / ${done}/${total || task.count}</p>
+            <p>先列设定再完善 / ${queueStatusName(task.status)} / ${done}/${total || task.count}</p>
           </div>
           <div class="queue-task-actions">
             <button class="mini-button" data-action="run-task">开始</button>
@@ -1670,14 +1670,14 @@ async function createQueueTask(event) {
   event.preventDefault();
   const body = {
     title: $('#queueTitle').value.trim(),
-    mode: $('#queueMode').value,
+    mode: 'outline',
     count: Number($('#queueCount').value || 1),
     autoExport: $('#queueAutoExport').checked,
-    reviewBeforeRun: $('#queueReviewBeforeRun')?.checked !== false,
+    reviewBeforeRun: false,
     seedText: $('#queueSeedText').value.trim(),
-    itemsText: $('#queueItemsText').value.trim()
+    itemsText: ''
   };
-  if (!body.seedText && !body.itemsText) return toast('先写任务说明或条目', 'error');
+  if (!body.seedText) return toast('先写一个批次方向', 'error');
   const payload = await api('/api/queue/tasks', { method: 'POST', body: JSON.stringify(body) });
   state.queue = payload.queue;
   renderQueue();

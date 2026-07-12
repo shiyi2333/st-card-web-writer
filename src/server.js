@@ -356,20 +356,20 @@ function countFromText(text = '', fallback = 3) {
 }
 
 function normalizeQueueTaskInput(input = {}, userText = '') {
-  const mode = input.mode === 'direct' ? 'direct' : 'outline';
-  const count = Math.max(1, Math.min(Number(input.count) || countFromText(userText), 20));
+  const mode = 'outline';
+  const count = Math.max(1, Math.min(Number(input.count) || countFromText(userText, 5), 20));
   const seedText = String(input.seedText || input.brief || input.prompt || userText || '').trim();
   const itemsText = Array.isArray(input.items)
     ? input.items.map((item) => typeof item === 'string' ? item : [item.title, item.brief].filter(Boolean).join(': ')).filter(Boolean).join('\n')
     : String(input.itemsText || '').trim();
   return {
-    title: String(input.title || '').trim() || (mode === 'outline' ? 'AI 批次设定任务' : 'AI 多卡生成任务'),
+    title: String(input.title || '').trim() || 'AI 批次设定任务',
     mode,
     count,
     seedText,
     itemsText,
     autoExport: input.autoExport !== false,
-    reviewBeforeRun: input.reviewBeforeRun !== false
+    reviewBeforeRun: false
   };
 }
 
@@ -503,11 +503,11 @@ function fallbackPlanFromText(text = '', selectedSkills = []) {
       action: 'queue-create-task',
       input: {
         title: 'AI 批次写卡任务',
-        mode: /直接|逐条|每行/.test(text) ? 'direct' : 'outline',
-        count: countFromText(text, 3),
+        mode: 'outline',
+        count: countFromText(text, 5),
         seedText: text,
         autoExport: true,
-        reviewBeforeRun: true
+        reviewBeforeRun: false
       },
       reason: '用户需要创建多角色卡队列'
     });
@@ -548,9 +548,9 @@ async function planSkillActions({ model, conversation, userText, section, select
             '你是 skill planner。只输出 JSON，不要解释。',
             'JSON 格式：{"skills":["skill-id"],"actions":[{"action":"web-search|image-search|export-card|workspace-write|card-section-rewrite|queue-create-task|ask-user","input":{},"reason":"简短原因"}]}',
             '只有用户明确需要工具时才返回 action；普通聊天返回 {"actions":[]}.',
-            '当用户要求批量写卡、创建多张角色卡、先列设定再逐张完善时，可以使用 queue-create-task。input 可以是单个任务，也可以是 {"tasks":[...]}；mode 为 outline 或 direct；默认 reviewBeforeRun=true。',
+            '当用户要求批量写卡、创建多张角色卡、先列设定再逐张完善时，可以使用 queue-create-task。统一使用 mode="outline"、reviewBeforeRun=false：队列开始后内部先列 N 个简洁设定，再自动依次完善成完整角色卡。',
             '当写卡方向、数量、题材、尺度、导出方式等信息不足且继续执行会偏离用户习惯时，可以使用 ask-user 创建前端问卷。问卷问题应简洁，最多 6 个。',
-            'queue-create-task 默认只创建队列；除非用户明确说立刻开始/直接跑，否则不要设置 start=true。',
+            'queue-create-task 默认只创建队列；除非用户明确说立刻开始/直接跑，否则不要设置 start=true。用户没有指定数量时默认 count=5。',
             '如果用户需要某个纯提示词风格 skill，可以只返回 skills，不需要虚构 action。',
             '写卡、改卡、作者备注、开场白、ST/SillyTavern 相关请求应优先选择 character-card-writer 和 st-card-style-guide；成人肉感/安产型文风请求可选择 openclaw-erotic-style。',
             '不要执行删除、移动等危险文件操作。',
