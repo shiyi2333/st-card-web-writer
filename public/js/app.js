@@ -1621,6 +1621,7 @@ function renderQueue() {
           </div>
           <div class="queue-task-actions">
             <button class="mini-button" data-action="run-task">开始</button>
+            ${(task.items || []).length > 1 ? '<button class="mini-button" data-action="split-task">拆成单卡队列</button>' : ''}
             <button class="mini-button" data-action="retry-task">重试失败</button>
             <button class="mini-button" data-action="cancel-task">取消</button>
           </div>
@@ -1651,6 +1652,9 @@ function renderQueue() {
   });
   $$('#queueTaskList [data-action="retry-task"]').forEach((button) => {
     button.addEventListener('click', () => retryQueue(button.closest('[data-task]')?.dataset.task).catch((error) => toast(error.message, 'error')));
+  });
+  $$('#queueTaskList [data-action="split-task"]').forEach((button) => {
+    button.addEventListener('click', () => splitQueueTask(button.closest('[data-task]')?.dataset.task).catch((error) => toast(error.message, 'error')));
   });
   $$('#queueTaskList [data-action="cancel-task"]').forEach((button) => {
     button.addEventListener('click', () => cancelQueue(button.closest('[data-task]')?.dataset.task).catch((error) => toast(error.message, 'error')));
@@ -1712,6 +1716,14 @@ async function retryQueue(taskId = '', itemId = '') {
   renderQueue();
   startQueuePolling();
   toast('已重新加入队列');
+}
+
+async function splitQueueTask(taskId = '') {
+  if (!taskId) return;
+  const payload = await api(`/api/queue/tasks/${encodeURIComponent(taskId)}/split`, { method: 'POST', body: JSON.stringify({}) });
+  state.queue = payload.queue;
+  renderQueue();
+  toast(`已拆成 ${payload.tasks?.length || 0} 个单卡队列`);
 }
 
 function startQueuePolling() {

@@ -36,7 +36,8 @@ export class CardQueue extends EventEmitter {
   async createTask(input = {}) {
     const now = this.now();
     const mode = 'outline';
-    const count = Math.max(1, Math.min(Number(input.count) || 1, 20));
+    const rawItems = this.normalizeInputItems(input);
+    const count = Math.max(1, Math.min(Number(input.count) || rawItems.length || 1, 20));
     const task = {
       id: this.id('queue'),
       title: String(input.title || '').trim() || '设定展开队列',
@@ -50,7 +51,7 @@ export class CardQueue extends EventEmitter {
       activeIndex: -1,
       createdAt: now,
       updatedAt: now,
-      items: [],
+      items: rawItems.slice(0, count).map((item, index) => this.makeItem(item, index, now)),
       logs: []
     };
     await this.store.mutate((data) => {
@@ -62,11 +63,34 @@ export class CardQueue extends EventEmitter {
     return task;
   }
 
-  makeItem(text, index, now = this.now()) {
+  normalizeInputItems(input = {}) {
+    if (Array.isArray(input.items)) {
+      return input.items
+        .map((item) => {
+          if (typeof item === 'string') return { title: '', brief: item.trim() };
+          return {
+            title: String(item.title || item.name || '').trim(),
+            brief: String(item.brief || item.description || item.prompt || item.text || '').trim()
+          };
+        })
+        .filter((item) => item.title || item.brief);
+    }
+    return String(input.itemsText || '')
+      .split(/\r?\n+/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => ({ title: '', brief: line }));
+  }
+
+  makeItem(input, index, now = this.now()) {
+    const source = typeof input === 'string' ? { title: '', brief: input } : (input || {});
+    const title = String(source.title || '').trim();
+    const brief = String(source.brief || source.text || '').trim();
+    const fallback = brief || title || `角色 ${index + 1}`;
     return {
       id: this.id('qitem'),
-      title: text.slice(0, 48) || `角色 ${index + 1}`,
-      brief: text,
+      title: title || fallback.slice(0, 48),
+      brief: brief || title,
       status: 'queued',
       retries: 0,
       createdAt: now,
@@ -108,6 +132,37 @@ export class CardQueue extends EventEmitter {
     });
     this.emit('change');
     return this.task(taskId);
+  }
+
+  async splitTask(taskId) {
+    const now = this.now();
+    let created = [];
+    await this.store.mutate((data) => {
+      const tasks = data.cardQueue?.tasks || [];
+      const index = tasks.findIndex((item) => item.id === taskId);
+      const task = tasks[index];
+      if (!task || (task.items || []).length <= 1) return;
+      created = task.items.map((item, itemIndex) => ({
+        id: this.id('queue'),
+        title: `${task.title} - ${itemIndex + 1}. ${item.title || `角色 ${itemIndex + 1}`}`.slice(0, 96),
+        mode: 'outline',
+        seedText: task.seedText,
+        itemsText: '',
+        count: 1,
+        autoExport: task.autoExport !== false,
+        reviewBeforeRun: false,
+        status: 'queued',
+        activeIndex: -1,
+        createdAt: now,
+        updatedAt: now,
+        items: [this.makeItem({ title: item.title, brief: item.brief }, 0, now)],
+        logs: [{ at: now, message: `由批次队列 ${task.title} 拆分而来` }]
+      }));
+      tasks.splice(index, 1, ...created);
+      data.cardQueue.tasks = tasks.slice(0, 40);
+    });
+    this.emit('change');
+    return created;
   }
 
   async pause() {
@@ -249,7 +304,8 @@ export class CardQueue extends EventEmitter {
     const task = this.task(taskId);
     const prompt = [
       `请基于下面需求列出 ${task.count} 个简洁角色卡设定。`,
-      '只输出 JSON 数组，每项包含 title 和 brief 字段，不要 Markdown，不要解释。',
+      `必须正好输出 ${task.count} 项，每一项之后都会作为一个固定槽位逐张生成完整角色卡。`,
+      '只输出 JSON 数组，每项包含 title 和 brief 字段；brief 要能独立指导一张卡，不要 Markdown，不要解释。',
       task.seedText || task.itemsText
     ].join('\n\n');
     const text = await this.chatText(prompt);
@@ -261,14 +317,17 @@ export class CardQueue extends EventEmitter {
       parsed = String(text).split(/\r?\n/).map((line) => ({ title: line.replace(/^[-\d.\s]+/, '').slice(0, 40), brief: line.replace(/^[-\d.\s]+/, '') })).filter((item) => item.brief);
     }
     const now = this.now();
-    const items = parsed.slice(0, task.count).map((item, index) => this.makeItem(`${item.title || ''}${item.brief ? `：${item.brief}` : ''}`, index, now));
+    const items = parsed.slice(0, task.count).map((item, index) => this.makeItem({
+      title: item.title || item.name || '',
+      brief: item.brief || item.description || item.prompt || item.text || ''
+    }, index, now));
     await this.store.mutate((data) => {
       const target = (data.cardQueue?.tasks || []).find((item) => item.id === taskId);
       if (!target) return;
       target.items = items.length ? items : [this.makeItem(task.seedText || '新角色卡', 0, now)];
       target.updatedAt = now;
       target.logs ||= [];
-      target.logs.push({ at: now, message: `已生成 ${target.items.length} 个简洁设定` });
+      target.logs.push({ at: now, message: `已生成 ${target.items.length} 个固定设定槽位` });
     });
     this.emit('change');
   }
@@ -332,11 +391,13 @@ export class CardQueue extends EventEmitter {
 
   cardPrompt(task, item, index) {
     return [
-      '请把下面简洁设定完善成完整 SillyTavern 角色卡 Markdown。',
+      '请把下面这个固定槽位设定完善成完整 SillyTavern 角色卡 Markdown。',
+      '只能扩写当前槽位，不要重新列设定，不要替换角色核心概念，不要把同一批次里的其他槽位混进来。',
       '必须使用这些一级标题：# 名称、# 描述、# 性格、# 场景、# 开场白、# 作者备注、# 标签、# 绘图标签。',
       '描述部分优先写成可解析的结构化 YAML 代码块；绘图标签使用 Danbooru 英文 tag；开场白写成一段可直接作为 first message 的中文内容。',
-      `这是队列任务 ${task.title} 的第 ${index + 1} 张卡。`,
-      item.brief
+      `这是队列任务「${task.title}」的第 ${index + 1} 张卡。`,
+      `槽位标题：${item.title || `角色 ${index + 1}`}`,
+      `槽位设定：${item.brief}`
     ].join('\n\n');
   }
 

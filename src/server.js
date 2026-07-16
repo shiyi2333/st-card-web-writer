@@ -357,17 +357,25 @@ function countFromText(text = '', fallback = 3) {
 
 function normalizeQueueTaskInput(input = {}, userText = '') {
   const mode = 'outline';
-  const count = Math.max(1, Math.min(Number(input.count) || countFromText(userText, 5), 20));
+  const items = Array.isArray(input.items)
+    ? input.items.map((item) => {
+      if (typeof item === 'string') return { title: '', brief: item.trim() };
+      return {
+        title: String(item.title || item.name || '').trim(),
+        brief: String(item.brief || item.description || item.prompt || item.text || '').trim()
+      };
+    }).filter((item) => item.title || item.brief)
+    : [];
+  const count = Math.max(1, Math.min(Number(input.count) || items.length || countFromText(userText, 5), 20));
   const seedText = String(input.seedText || input.brief || input.prompt || userText || '').trim();
-  const itemsText = Array.isArray(input.items)
-    ? input.items.map((item) => typeof item === 'string' ? item : [item.title, item.brief].filter(Boolean).join(': ')).filter(Boolean).join('\n')
-    : String(input.itemsText || '').trim();
+  const itemsText = String(input.itemsText || '').trim();
   return {
     title: String(input.title || '').trim() || 'AI 批次设定任务',
     mode,
     count,
     seedText,
     itemsText,
+    items,
     autoExport: input.autoExport !== false,
     reviewBeforeRun: false
   };
@@ -414,9 +422,20 @@ function normalizeActionInput(action, input = {}, userText = '') {
   if (action === 'image-search') return { tags: input.tags || userText, limit: input.limit || store.data.settings.imageResultCount || 10, page: input.page || 1 };
   if (action === 'export-card') return { messageId: input.messageId || '', markdown: input.markdown || '', selectedImage: input.selectedImage || null };
   if (action === 'queue-create-task') {
-    const rawTasks = Array.isArray(input.tasks) && input.tasks.length ? input.tasks : [input];
+    const splitItems = Array.isArray(input.items) && (input.splitIntoTasks || input.oneTaskPerItem || input.separateTasks);
+    const rawTasks = Array.isArray(input.tasks) && input.tasks.length
+      ? input.tasks
+      : splitItems
+        ? input.items.map((item, index) => ({
+          title: typeof item === 'string' ? `单卡任务 ${index + 1}` : (item.title || item.name || `单卡任务 ${index + 1}`),
+          seedText: input.seedText || userText,
+          count: 1,
+          items: [item],
+          autoExport: input.autoExport
+        }))
+        : [input];
     return {
-      tasks: rawTasks.slice(0, 6).map((task) => normalizeQueueTaskInput(task, userText)),
+      tasks: rawTasks.slice(0, 20).map((task) => normalizeQueueTaskInput(task, userText)),
       start: Boolean(input.start || input.run)
     };
   }
@@ -548,7 +567,9 @@ async function planSkillActions({ model, conversation, userText, section, select
             '你是 skill planner。只输出 JSON，不要解释。',
             'JSON 格式：{"skills":["skill-id"],"actions":[{"action":"web-search|image-search|export-card|workspace-write|card-section-rewrite|queue-create-task|ask-user","input":{},"reason":"简短原因"}]}',
             '只有用户明确需要工具时才返回 action；普通聊天返回 {"actions":[]}.',
-            '当用户要求批量写卡、创建多张角色卡、先列设定再逐张完善时，可以使用 queue-create-task。统一使用 mode="outline"、reviewBeforeRun=false：队列开始后内部先列 N 个简洁设定，再自动依次完善成完整角色卡。',
+            '当用户要求批量写卡、创建多张角色卡、先列设定再逐张完善时，可以使用 queue-create-task。统一使用 mode="outline"、reviewBeforeRun=false。',
+            '如果你已经列出了具体角色设定，必须把它们放进 input.items 数组；一个 items 项就是一个固定槽位，后续会一槽一请求生成详细卡，不能只写在 seedText 里。',
+            '默认创建一个批次队列：count 应等于 items.length。如果用户明确要“分成十个队列/每个队列一张卡/单独任务”，设置 splitIntoTasks=true 或直接返回 tasks 数组，每个任务 count=1 且 items 只有一项。',
             '当写卡方向、数量、题材、尺度、导出方式等信息不足且继续执行会偏离用户习惯时，可以使用 ask-user 创建前端问卷。问卷问题应简洁，最多 6 个。',
             'queue-create-task 默认只创建队列；除非用户明确说立刻开始/直接跑，否则不要设置 start=true。用户没有指定数量时默认 count=5。',
             '如果用户需要某个纯提示词风格 skill，可以只返回 skills，不需要虚构 action。',
@@ -1104,6 +1125,16 @@ app.put('/api/queue/tasks/:taskId/items/:itemId', async (req, res, next) => {
     const task = await cardQueue.updateItem(req.params.taskId, req.params.itemId, req.body || {});
     if (!task) return res.status(404).json({ error: '队列条目不存在' });
     res.json({ ok: true, task, queue: cardQueue.snapshot() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/queue/tasks/:id/split', async (req, res, next) => {
+  try {
+    const tasks = await cardQueue.splitTask(req.params.id);
+    if (!tasks.length) return res.status(400).json({ error: '这个队列没有可拆分的多个设定槽位' });
+    res.json({ ok: true, tasks, queue: cardQueue.snapshot() });
   } catch (error) {
     next(error);
   }
