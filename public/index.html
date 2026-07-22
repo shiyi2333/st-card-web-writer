@@ -29,6 +29,7 @@
           <button class="tab-button" data-tab="preview">预览</button>
           <button class="tab-button" data-tab="images">搜图</button>
           <button class="tab-button" data-tab="files">目录</button>
+          <button class="tab-button" data-tab="catalog">卡片库</button>
           <button class="tab-button" data-tab="search">搜索</button>
           <button class="tab-button" data-tab="prompts">预设</button>
           <button class="tab-button" data-tab="models">模型</button>
@@ -175,6 +176,21 @@
           <div class="file-root-line"><span id="workspaceRootLine"></span></div>
           <div id="cardIndexList" class="card-index-list"></div>
           <div id="fileList" class="file-list"></div>
+        </section>
+
+        <section id="catalogPanel" class="panel">
+          <div class="panel-titlebar">
+            <div>
+              <span class="eyebrow">Card Catalog</span>
+              <h2>绘图标签与简介</h2>
+            </div>
+            <span id="catalogCount" class="mode-pill warm">0 张</span>
+          </div>
+          <div class="toolbar catalog-toolbar">
+            <span id="catalogWorkspaceLine" class="muted-line"></span>
+            <button id="refreshCatalogBtn" class="ghost-button" type="button">刷新</button>
+          </div>
+          <div id="catalogList" class="catalog-list"></div>
         </section>
 
         <section id="searchPanel" class="panel">
@@ -350,6 +366,7 @@
       <button class="tab-button" data-tab="preview">预览</button>
       <button class="tab-button" data-tab="images">搜图</button>
       <button class="tab-button" data-tab="files">目录</button>
+      <button class="tab-button" data-tab="catalog">卡片库</button>
       <button class="tab-button" data-tab="search">搜索</button>
       <button class="tab-button" data-tab="prompts">预设</button>
       <button class="tab-button" data-tab="models">模型</button>

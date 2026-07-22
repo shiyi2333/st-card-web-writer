@@ -1,6 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { ensureWorkspace, safeFileName } from './workspace.js';
+import { makeCardJson, parseMarkdownCard } from './card.js';
+import { readCardJsonFromPng } from './png.js';
 
 const INDEX_FILE = '.st-card-index.json';
 
@@ -93,4 +95,118 @@ export async function removeWorkspaceIndexSidecars(settings = {}, removedNames =
   }
   if (changed) await fs.writeFile(indexPath(workspace), JSON.stringify(index, null, 2), 'utf8');
   return { ...index, workspace: workspace.name };
+}
+
+function cleanTags(value) {
+  const source = Array.isArray(value) ? value : String(value || '').split(/[,，\s\n]+/);
+  return [...new Set(source.map((item) => String(item).trim()).filter(Boolean))].slice(0, 32);
+}
+
+function cardDetails(card = {}) {
+  const data = card.data || card;
+  const extensions = data.extensions || {};
+  return {
+    name: String(data.name || card.name || '未命名角色卡').trim() || '未命名角色卡',
+    summary: String(data.creator_notes || card.creatorcomment || data.description || card.description || '').trim(),
+    drawingTags: cleanTags(extensions.danbooru_tags || card.danbooru_tags)
+  };
+}
+
+async function readArtifactCard(filePath, extension) {
+  if (extension === '.png') return readCardJsonFromPng(await fs.readFile(filePath));
+  if (extension === '.json') {
+    const parsed = JSON.parse(await fs.readFile(filePath, 'utf8'));
+    if (!parsed?.data?.name && !parsed?.name) throw new Error('不是角色卡 JSON');
+    return parsed;
+  }
+  if (extension === '.md') {
+    const markdown = await fs.readFile(filePath, 'utf8');
+    const sections = parseMarkdownCard(markdown);
+    if (!sections['名称']) throw new Error('不是角色卡 Markdown');
+    return makeCardJson(markdown);
+  }
+  throw new Error('不支持的角色卡格式');
+}
+
+function artifactNames(record = {}) {
+  return [record.png, record.json, record.markdown].filter(Boolean);
+}
+
+export async function readWorkspaceCatalog(settings = {}) {
+  const workspace = await ensureWorkspace(settings);
+  const index = await readRawIndex(workspace);
+  const entries = await fs.readdir(workspace.dir, { withFileTypes: true });
+  const files = new Map();
+
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const extension = path.extname(entry.name).toLowerCase();
+    if (!['.png', '.json', '.md'].includes(extension) || entry.name === INDEX_FILE) continue;
+    const fullPath = path.join(workspace.dir, entry.name);
+    const stat = await fs.stat(fullPath);
+    files.set(entry.name, { name: entry.name, extension, fullPath, stat });
+  }
+
+  const referenced = new Set();
+  const cards = [];
+  for (const record of index.cards) {
+    const candidates = artifactNames(record).map((name) => files.get(name)).filter(Boolean);
+    artifactNames(record).forEach((name) => referenced.add(name));
+    let details = null;
+    for (const candidate of candidates) {
+      try {
+        details = cardDetails(await readArtifactCard(candidate.fullPath, candidate.extension));
+        break;
+      } catch {
+        // Try the next sidecar when one artifact is malformed or unavailable.
+      }
+    }
+    if (!details && !candidates.length) continue;
+    cards.push({
+      ...record,
+      ...(details || { name: record.name, summary: '', drawingTags: [] }),
+      exportedAt: record.createdAt || candidates[0]?.stat.birthtime?.toISOString() || candidates[0]?.stat.mtime?.toISOString()
+    });
+  }
+
+  const orphanGroups = new Map();
+  for (const file of files.values()) {
+    if (referenced.has(file.name)) continue;
+    const stem = path.basename(file.name, file.extension);
+    const group = orphanGroups.get(stem) || [];
+    group.push(file);
+    orphanGroups.set(stem, group);
+  }
+
+  for (const [stem, group] of orphanGroups) {
+    const candidates = [...group].sort((a, b) => ['.png', '.json', '.md'].indexOf(a.extension) - ['.png', '.json', '.md'].indexOf(b.extension));
+    let details = null;
+    for (const candidate of candidates) {
+      try {
+        details = cardDetails(await readArtifactCard(candidate.fullPath, candidate.extension));
+        break;
+      } catch {
+        // Ignore unrelated or malformed files in the workspace.
+      }
+    }
+    if (!details) continue;
+    const exportedAt = candidates.reduce((earliest, candidate) => {
+      const value = candidate.stat.birthtimeMs > 0 ? candidate.stat.birthtime : candidate.stat.mtime;
+      return !earliest || value < earliest ? value : earliest;
+    }, null)?.toISOString();
+    cards.push({
+      id: `file_${stem}`,
+      ...details,
+      source: 'workspace',
+      png: candidates.find((item) => item.extension === '.png')?.name || '',
+      json: candidates.find((item) => item.extension === '.json')?.name || '',
+      markdown: candidates.find((item) => item.extension === '.md')?.name || '',
+      exportedAt,
+      createdAt: exportedAt,
+      updatedAt: exportedAt
+    });
+  }
+
+  cards.sort((a, b) => new Date(a.exportedAt || 0) - new Date(b.exportedAt || 0));
+  return { workspace: workspace.name, cards };
 }

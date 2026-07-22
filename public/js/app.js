@@ -37,6 +37,7 @@ const state = {
   workspaces: [],
   files: [],
   workspaceIndex: { cards: [] },
+  catalog: { cards: [] },
   lastUserText: '',
   skills: [],
   selectedSkills: [],
@@ -152,6 +153,7 @@ function setTab(name) {
   $$('.tab-button').forEach((button) => button.classList.toggle('active', button.dataset.tab === name));
   $$('.panel').forEach((panel) => panel.classList.remove('active'));
   $(`#${name}Panel`)?.classList.add('active');
+  if (name === 'catalog') loadCatalog().catch((error) => toast(error.message, 'error'));
 }
 
 async function requestFullscreenMode(orientation = 'landscape') {
@@ -1070,6 +1072,7 @@ async function loadWorkspaces() {
   state.settings.currentWorkspace = payload.current || state.settings.currentWorkspace || '';
   $('#workspaceRootLine').textContent = `根目录：${payload.root || ''}`;
   renderWorkspaceSelect();
+  state.catalog = { cards: [] };
   await loadFiles().catch(() => {});
 }
 
@@ -1183,6 +1186,84 @@ function renderCardIndex() {
       </article>
     `;
   }).join('');
+}
+
+async function copyText(value) {
+  const text = String(value || '');
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // Local HTTP and embedded browsers can deny the modern clipboard API.
+    }
+  }
+  const input = document.createElement('textarea');
+  input.value = text;
+  input.style.position = 'fixed';
+  input.style.opacity = '0';
+  document.body.appendChild(input);
+  input.focus();
+  input.select();
+  const copied = document.execCommand('copy');
+  input.remove();
+  if (!copied) throw new Error('复制失败，请检查浏览器剪贴板权限');
+}
+
+async function loadCatalog() {
+  state.catalog = await api('/api/workspaces/catalog');
+  renderCatalog();
+}
+
+function renderCatalog() {
+  const list = $('#catalogList');
+  const cards = state.catalog?.cards || [];
+  $('#catalogCount').textContent = `${cards.length} 张`;
+  $('#catalogWorkspaceLine').textContent = `当前工作区：${state.catalog?.workspace || state.settings.currentWorkspace || ''} · 按导出先后排列`;
+  if (!cards.length) {
+    list.innerHTML = '<div class="empty-state">当前工作区没有可读取的角色卡。</div>';
+    return;
+  }
+
+  list.innerHTML = cards.map((card, index) => {
+    const tags = (card.drawingTags || []).join(', ');
+    const summary = card.summary || '暂无简介';
+    const image = card.png
+      ? `<img class="catalog-cover" src="/api/workspaces/file?name=${encodeURIComponent(card.png)}" alt="${escapeHtml(card.name)}">`
+      : '<div class="catalog-cover placeholder">ST</div>';
+    return `
+      <article class="catalog-card" data-catalog-id="${escapeHtml(card.id)}">
+        ${image}
+        <div class="catalog-card-body">
+          <div class="catalog-card-head">
+            <div>
+              <span class="catalog-order">${index + 1}</span>
+              <h3>${escapeHtml(card.name)}</h3>
+              <p>${formatDate(card.exportedAt || card.createdAt)}</p>
+            </div>
+            <button class="mini-button" data-action="copy-card-info" type="button">复制标签＋简介</button>
+          </div>
+          <div class="catalog-section">
+            <strong>绘图标签</strong>
+            <p class="catalog-tags">${tags ? escapeHtml(tags) : '暂无绘图标签'}</p>
+          </div>
+          <div class="catalog-section catalog-summary">
+            <strong>简介</strong>
+            <p>${escapeHtml(summary)}</p>
+          </div>
+        </div>
+      </article>
+    `;
+  }).join('');
+
+  $$('#catalogList [data-action="copy-card-info"]').forEach((button, index) => {
+    button.addEventListener('click', async () => {
+      const card = cards[index];
+      const tags = (card.drawingTags || []).join(', ');
+      await copyText(`绘图标签：${tags || '无'}\n简介：${card.summary || '无'}`);
+      toast(`已复制「${card.name}」的绘图标签和简介`);
+    });
+  });
 }
 
 async function renameFile(name) {
@@ -1784,6 +1865,7 @@ function wireEvents() {
   $('#workspaceSelect').addEventListener('change', () => switchWorkspace().catch((error) => toast(error.message, 'error')));
   $('#clearNonPngBtn')?.addEventListener('click', () => clearNonPngFiles().catch((error) => toast(error.message, 'error')));
   $('#refreshFilesBtn').addEventListener('click', () => loadFiles().catch((error) => toast(error.message, 'error')));
+  $('#refreshCatalogBtn')?.addEventListener('click', () => loadCatalog().catch((error) => toast(error.message, 'error')));
   $('#newModelBtn').addEventListener('click', () => fillModelForm({}));
   $('#modelForm').addEventListener('submit', (event) => saveModel(event).catch((error) => toast(error.message, 'error')));
   $('#fetchModelsBtn').addEventListener('click', () => fetchRemoteModels().catch((error) => toast(error.message, 'error')));

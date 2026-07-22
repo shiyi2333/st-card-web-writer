@@ -28,7 +28,7 @@ import { searchDanbooru } from './danbooru.js';
 import { listSkillFileTree, readSkillCatalog, readSkillFile, saveSkillFile } from './skills.js';
 import { CardQueue } from './queue.js';
 import { validateCardMarkdown, validationRepairPrompt } from './validator.js';
-import { readWorkspaceIndex, recordWorkspaceCard, removeWorkspaceIndexSidecars } from './workspace-index.js';
+import { readWorkspaceCatalog, readWorkspaceIndex, recordWorkspaceCard, removeWorkspaceIndexSidecars } from './workspace-index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -1337,6 +1337,14 @@ app.get('/api/workspaces', async (req, res, next) => {
 app.get('/api/workspaces/index', async (req, res, next) => {
   try {
     res.json(await readWorkspaceIndex(store.data.settings));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/workspaces/catalog', async (req, res, next) => {
+  try {
+    res.json(await readWorkspaceCatalog(store.data.settings));
   } catch (error) {
     next(error);
   }

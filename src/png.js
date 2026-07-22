@@ -74,6 +74,38 @@ export function embedCardInPng(pngBuffer, cardJson) {
   return Buffer.concat(chunks);
 }
 
+export function readCardJsonFromPng(pngBuffer) {
+  if (!Buffer.isBuffer(pngBuffer) || !pngBuffer.subarray(0, 8).equals(PNG_SIGNATURE)) {
+    throw new Error('文件不是有效 PNG');
+  }
+
+  let offset = 8;
+  while (offset + 12 <= pngBuffer.length) {
+    const length = pngBuffer.readUInt32BE(offset);
+    const type = pngBuffer.subarray(offset + 4, offset + 8).toString('ascii');
+    const dataStart = offset + 8;
+    const dataEnd = dataStart + length;
+    const chunkEnd = dataEnd + 4;
+    if (chunkEnd > pngBuffer.length) break;
+
+    if (type === 'tEXt') {
+      const data = pngBuffer.subarray(dataStart, dataEnd);
+      const separator = data.indexOf(0);
+      if (separator > 0) {
+        const keyword = data.subarray(0, separator).toString('latin1');
+        if (keyword === 'chara' || keyword === 'ccv3') {
+          const encoded = data.subarray(separator + 1).toString('utf8').trim();
+          return JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'));
+        }
+      }
+    }
+
+    offset = chunkEnd;
+  }
+
+  throw new Error('PNG 中没有角色卡数据');
+}
+
 export async function writeCardPng({ avatarDataUrl, cardJson, outputPath }) {
   const avatar = dataUrlToBuffer(avatarDataUrl);
   const output = embedCardInPng(avatar, cardJson);
