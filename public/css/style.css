@@ -201,6 +201,14 @@
   gap: 10px;
 }
 
+.catalog-card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .catalog-card-head h3 {
   display: inline;
   margin: 0 0 0 7px;
@@ -270,6 +278,10 @@
 
   .catalog-card-head {
     display: grid;
+  }
+
+  .catalog-card-actions {
+    justify-content: flex-start;
   }
 }
 

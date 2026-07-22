@@ -66,7 +66,7 @@ export function embedCardInPng(pngBuffer, cardJson) {
       const dataStart = offset + 8;
       const textData = pngBuffer.subarray(dataStart, dataStart + length);
       const keyword = textData.subarray(0, textData.indexOf(0)).toString('latin1');
-      if (keyword !== 'chara') chunks.push(pngBuffer.subarray(offset, chunkEnd));
+      if (keyword !== 'chara' && keyword !== 'ccv3') chunks.push(pngBuffer.subarray(offset, chunkEnd));
     }
     offset = chunkEnd;
   }

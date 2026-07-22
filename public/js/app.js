@@ -38,6 +38,7 @@ const state = {
   files: [],
   workspaceIndex: { cards: [] },
   catalog: { cards: [] },
+  pendingCatalogCover: null,
   lastUserText: '',
   skills: [],
   selectedSkills: [],
@@ -1229,7 +1230,7 @@ function renderCatalog() {
     const tags = (card.drawingTags || []).join(', ');
     const summary = card.summary || '暂无简介';
     const image = card.png
-      ? `<img class="catalog-cover" src="/api/workspaces/file?name=${encodeURIComponent(card.png)}" alt="${escapeHtml(card.name)}">`
+      ? `<img class="catalog-cover" src="/api/workspaces/file?name=${encodeURIComponent(card.png)}&v=${encodeURIComponent(card.coverUpdatedAt || card.updatedAt || '')}" alt="${escapeHtml(card.name)}">`
       : '<div class="catalog-cover placeholder">ST</div>';
     return `
       <article class="catalog-card" data-catalog-id="${escapeHtml(card.id)}">
@@ -1241,7 +1242,10 @@ function renderCatalog() {
               <h3>${escapeHtml(card.name)}</h3>
               <p>${formatDate(card.exportedAt || card.createdAt)}</p>
             </div>
-            <button class="mini-button" data-action="copy-card-info" type="button">复制标签＋简介</button>
+            <div class="catalog-card-actions">
+              ${card.png ? '<button class="mini-button" data-action="replace-cover" type="button">替换封面</button>' : ''}
+              <button class="mini-button" data-action="copy-card-info" type="button">复制标签＋简介</button>
+            </div>
           </div>
           <div class="catalog-section">
             <strong>绘图标签</strong>
@@ -1264,6 +1268,43 @@ function renderCatalog() {
       toast(`已复制「${card.name}」的绘图标签和简介`);
     });
   });
+  $$('#catalogList [data-action="replace-cover"]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const card = cards.find((item) => item.id === button.closest('[data-catalog-id]')?.dataset.catalogId);
+      if (!card?.png) return;
+      state.pendingCatalogCover = card;
+      const input = $('#catalogCoverInput');
+      input.value = '';
+      input.click();
+    });
+  });
+}
+
+function fileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener('load', () => resolve(String(reader.result || '')));
+    reader.addEventListener('error', () => reject(new Error('读取封面 PNG 失败')));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function replaceCatalogCover(event) {
+  const file = event.target.files?.[0];
+  const card = state.pendingCatalogCover;
+  state.pendingCatalogCover = null;
+  if (!file || !card?.png) return;
+  if (file.size > 20 * 1024 * 1024) throw new Error('封面 PNG 不能超过 20 MB');
+  if (file.type !== 'image/png' && !file.name.toLowerCase().endsWith('.png')) throw new Error('请选择 PNG 图片');
+
+  const avatarDataUrl = await fileAsDataUrl(file);
+  const payload = await api('/api/workspaces/catalog/cover', {
+    method: 'PUT',
+    body: JSON.stringify({ fileName: card.png, avatarDataUrl })
+  });
+  state.catalog = payload.catalog || state.catalog;
+  renderCatalog();
+  toast(`已替换「${payload.name || card.name}」的封面`);
 }
 
 async function renameFile(name) {
@@ -1866,6 +1907,7 @@ function wireEvents() {
   $('#clearNonPngBtn')?.addEventListener('click', () => clearNonPngFiles().catch((error) => toast(error.message, 'error')));
   $('#refreshFilesBtn').addEventListener('click', () => loadFiles().catch((error) => toast(error.message, 'error')));
   $('#refreshCatalogBtn')?.addEventListener('click', () => loadCatalog().catch((error) => toast(error.message, 'error')));
+  $('#catalogCoverInput')?.addEventListener('change', (event) => replaceCatalogCover(event).catch((error) => toast(error.message, 'error')));
   $('#newModelBtn').addEventListener('click', () => fillModelForm({}));
   $('#modelForm').addEventListener('submit', (event) => saveModel(event).catch((error) => toast(error.message, 'error')));
   $('#fetchModelsBtn').addEventListener('click', () => fetchRemoteModels().catch((error) => toast(error.message, 'error')));

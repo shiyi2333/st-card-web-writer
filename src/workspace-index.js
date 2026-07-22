@@ -1,8 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { ensureWorkspace, safeFileName } from './workspace.js';
+import { ensureInside, ensureWorkspace, safeFileName } from './workspace.js';
 import { makeCardJson, parseMarkdownCard } from './card.js';
-import { readCardJsonFromPng } from './png.js';
+import { dataUrlToBuffer, embedCardInPng, readCardJsonFromPng } from './png.js';
 
 const INDEX_FILE = '.st-card-index.json';
 
@@ -165,7 +165,8 @@ export async function readWorkspaceCatalog(settings = {}) {
     cards.push({
       ...record,
       ...(details || { name: record.name, summary: '', drawingTags: [] }),
-      exportedAt: record.createdAt || candidates[0]?.stat.birthtime?.toISOString() || candidates[0]?.stat.mtime?.toISOString()
+      exportedAt: record.createdAt || candidates[0]?.stat.birthtime?.toISOString() || candidates[0]?.stat.mtime?.toISOString(),
+      coverUpdatedAt: candidates.find((item) => item.extension === '.png')?.stat.mtime?.toISOString() || ''
     });
   }
 
@@ -201,6 +202,7 @@ export async function readWorkspaceCatalog(settings = {}) {
       png: candidates.find((item) => item.extension === '.png')?.name || '',
       json: candidates.find((item) => item.extension === '.json')?.name || '',
       markdown: candidates.find((item) => item.extension === '.md')?.name || '',
+      coverUpdatedAt: candidates.find((item) => item.extension === '.png')?.stat.mtime?.toISOString() || '',
       exportedAt,
       createdAt: exportedAt,
       updatedAt: exportedAt
@@ -209,4 +211,33 @@ export async function readWorkspaceCatalog(settings = {}) {
 
   cards.sort((a, b) => new Date(a.exportedAt || 0) - new Date(b.exportedAt || 0));
   return { workspace: workspace.name, cards };
+}
+
+export async function replaceWorkspaceCardCover(settings = {}, input = {}) {
+  const workspace = await ensureWorkspace(settings);
+  const fileName = safeFileName(input.fileName || '');
+  if (!fileName || path.extname(fileName).toLowerCase() !== '.png') {
+    const error = new Error('只能替换当前工作区中的角色卡 PNG');
+    error.status = 400;
+    throw error;
+  }
+
+  const target = ensureInside(workspace.root, path.join(workspace.dir, fileName));
+  const currentPng = await fs.readFile(target);
+  const cardJson = readCardJsonFromPng(currentPng);
+  const avatar = dataUrlToBuffer(input.avatarDataUrl);
+  if (avatar.length > 20 * 1024 * 1024) {
+    const error = new Error('封面 PNG 不能超过 20 MB');
+    error.status = 413;
+    throw error;
+  }
+
+  const output = embedCardInPng(avatar, cardJson);
+  await fs.writeFile(target, output);
+  return {
+    ok: true,
+    workspace: workspace.name,
+    fileName,
+    name: cardJson?.data?.name || cardJson?.name || fileName
+  };
 }
